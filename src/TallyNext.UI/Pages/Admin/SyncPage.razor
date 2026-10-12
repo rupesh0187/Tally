@@ -1,0 +1,160 @@
+@page "/sync"
+@inherits AppPage
+@inject IServiceProvider Services
+@inject IHostFeatures Host
+@inject LedgerCache LedgerCache
+
+<PageTitle>Synchronization — TallyNext</PageTitle>
+
+<div class="page-head">
+    <div><h1>@(Host.IsDesktop ? "Synchronization" : "Sync conflicts")</h1>
+        <div class="muted">@(Host.IsDesktop ? "Changes are saved on this computer first and uploaded automatically when the server is reachable." : "Changes uploaded from desktops that could not be applied automatically.")</div></div>
+    @if (_sync is { CanSyncNow: true })
+    {
+        <button class="btn primary" disabled="@(Busy || _sync.Status.State == SyncPanelState.Syncing)" @onclick="SyncNowAsync">Synchronize now</button>
+    }
+</div>
+<Alerts Error="@Error" Notice="@Notice" />
+
+@if (_sync is null)
+{
+    <p class="muted">Synchronization is not available in this application.</p>
+}
+else
+{
+    <div class="grid cols-3">
+        <div class="card stat"><div class="label">Status</div><div class="value"><span class="pill @_sync.Status.Tone">@_sync.Status.Label</span></div>
+            @if (!string.IsNullOrEmpty(_sync.Status.Message)) { <div class="muted small">@_sync.Status.Message</div> }</div>
+        <div class="card stat"><div class="label">Last successful synchronization</div><div class="value">@(_sync.Status.LastSuccessUtc is { } t ? Fmt.Date(t) : "never")</div></div>
+        <div class="card stat"><div class="label">Waiting for upload / needing attention</div><div class="value">@_sync.Status.PendingCount / @_sync.Status.AttentionCount</div></div>
+    </div>
+
+    <h2>Needs a decision</h2>
+    @if (_issues.Count == 0)
+    {
+        <p class="muted">Nothing needs attention.</p>
+    }
+    else
+    {
+        <p class="muted small">
+            <strong>Keep server version</strong> replaces this computer's copy with the server's (your change stays recorded but is not uploaded).
+            <strong>Keep my version</strong> uploads your change again on top of the server's.
+        </p>
+        @foreach (var issue in _issues)
+        {
+            <div class="card">
+                <div class="page-head" style="margin-bottom:.4rem">
+                    <div><strong>@issue.EntityType</strong> <span class="tag">@issue.Kind</span> <span class="muted small">@Fmt.Date(issue.DetectedAtUtc)</span>
+                        <div>@issue.Message <span class="muted small mono">@issue.Code</span></div></div>
+                    @if (State.Can(Permission.SyncConflictResolve))
+                    {
+                        <div class="toolbar">
+                            <button class="btn" disabled="@Busy" @onclick="() => ResolveAsync(issue, keepServer: true)">Keep server version</button>
+                            @if (Host.IsDesktop)
+                            {
+                                <button class="btn primary" disabled="@Busy" @onclick="() => ResolveAsync(issue, keepServer: false)">Keep my version</button>
+                            }
+                        </div>
+                    }
+                </div>
+                <details>
+                    <summary class="small">Compare versions</summary>
+                    <div class="grid cols-2 small mono" style="margin-top:.5rem">
+                        <div><strong>@(Host.IsDesktop ? "This computer" : "Device")</strong><pre style="white-space:pre-wrap">@Pretty(issue.LocalJson)</pre></div>
+                        <div><strong>Server</strong><pre style="white-space:pre-wrap">@(issue.ServerJson is null ? "(not available)" : Pretty(issue.ServerJson))</pre></div>
+                    </div>
+                </details>
+            </div>
+        }
+    }
+
+    @if (Host.IsDesktop)
+    {
+        <h2>Not yet uploaded</h2>
+        <table class="data">
+            <thead><tr><th>#</th><th>Record</th><th>Status</th><th class="num">Attempts</th><th>Last problem</th><th>Changed</th></tr></thead>
+            <tbody>
+                @foreach (var c in _unsynced)
+                {
+                    <tr><td>@c.Sequence</td><td>@c.EntityType</td><td>@c.Status</td><td class="num">@c.Attempts</td><td class="mono small">@c.LastErrorCode</td><td>@Fmt.Date(c.ModifiedAtUtc)</td></tr>
+                }
+                @if (_unsynced.Count == 0)
+                {
+                    <tr><td colspan="6" class="muted">Everything has been uploaded.</td></tr>
+                }
+            </tbody>
+        </table>
+    }
+}
+
+@code {
+    private ISyncPanel? _sync;
+    private IReadOnlyList<SyncIssue> _issues = [];
+    private IReadOnlyList<UnsyncedChange> _unsynced = [];
+
+    protected override async Task OnInitializedAsync()
+    {
+        _sync = Services.GetService(typeof(ISyncPanel)) as ISyncPanel;
+        if (_sync is not null)
+        {
+            _sync.Changed += OnSyncChanged;
+            await LoadAsync();
+        }
+    }
+
+    private void OnSyncChanged() => _ = InvokeAsync(async () =>
+    {
+        await LoadAsync();
+        StateHasChanged();
+    });
+
+    private Task LoadAsync() => !State.HasCompany || _sync is null
+        ? Task.CompletedTask
+        : RunAsync(async () =>
+        {
+            _issues = await _sync.IssuesAsync(State.CompanyId);
+            _unsynced = Host.IsDesktop ? await _sync.UnsyncedAsync(State.CompanyId) : [];
+        });
+
+    private async Task SyncNowAsync()
+    {
+        if (_sync is not null && await RunAsync(_sync.SyncNowAsync))
+        {
+            LedgerCache.Invalidate();
+            Notice = "Synchronization finished.";
+            await LoadAsync();
+        }
+    }
+
+    private async Task ResolveAsync(SyncIssue issue, bool keepServer)
+    {
+        if (_sync is not null && await RunAsync(() => _sync.ResolveAsync(State.CompanyId, issue.Id, keepServer)))
+        {
+            LedgerCache.Invalidate();
+            Notice = keepServer ? "The server version was kept." : "Your version will be uploaded again.";
+            await LoadAsync();
+        }
+    }
+
+    private static string Pretty(string json)
+    {
+        try
+        {
+            using var document = System.Text.Json.JsonDocument.Parse(json);
+            return System.Text.Json.JsonSerializer.Serialize(document.RootElement, new System.Text.Json.JsonSerializerOptions { WriteIndented = true });
+        }
+        catch (System.Text.Json.JsonException)
+        {
+            return json;
+        }
+    }
+
+    public override void Dispose()
+    {
+        base.Dispose();
+        if (_sync is not null)
+        {
+            _sync.Changed -= OnSyncChanged;
+        }
+    }
+}

@@ -1,0 +1,17 @@
+<select class="input" value="@Value" @onchange="OnChange" aria-label="Role">
+    @foreach (var role in Enum.GetValues<CompanyRole>())
+    {
+        <option value="@role">@role</option>
+    }
+</select>
+
+@code {
+    [Parameter]
+    public CompanyRole Value { get; set; }
+
+    [Parameter]
+    public EventCallback<CompanyRole> ValueChanged { get; set; }
+
+    private Task OnChange(ChangeEventArgs e) =>
+        Enum.TryParse<CompanyRole>(e.Value?.ToString(), out var role) ? ValueChanged.InvokeAsync(role) : Task.CompletedTask;
+}

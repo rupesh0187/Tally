@@ -1,0 +1,9 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Pure domain model: no EF Core, UI or ASP.NET Core dependencies. -->
+  <PropertyGroup>
+    <TargetFramework>$(TallyNextTargetFramework)</TargetFramework>
+  </PropertyGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="TallyNext.UnitTests" />
+  </ItemGroup>
+</Project>

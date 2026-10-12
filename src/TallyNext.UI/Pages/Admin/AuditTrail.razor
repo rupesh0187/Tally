@@ -1,0 +1,72 @@
+@page "/audit"
+@inherits AppPage
+
+<PageTitle>Audit trail — TallyNext</PageTitle>
+
+<div class="page-head">
+    <div><h1>Audit trail</h1><div class="muted">Append-only and hash-chained; any alteration is detected by verification</div></div>
+    <div class="toolbar">
+        <label class="field">Action starts with <input class="input" placeholder="voucher., ledger., sync." @bind="_action" @bind:event="oninput" @bind:after="ReloadAsync" /></label>
+        <button class="btn" disabled="@Busy" @onclick="VerifyAsync">Verify integrity</button>
+    </div>
+</div>
+<Alerts Error="@Error" />
+@if (_verification is { } v)
+{
+    <div class="alert @(v.IsValid ? "ok" : "error")">
+        @(v.IsValid ? $"Verified {v.EntriesChecked:N0} records: the chain is intact." : $"Integrity problem at record {v.FirstBrokenSequence}: {v.Problem}")
+    </div>
+}
+
+<table class="data">
+    <thead><tr><th>#</th><th>When</th><th>Action</th><th>Summary</th><th>Source</th><th>User / device</th></tr></thead>
+    <tbody>
+        @foreach (var e in _page?.Items ?? [])
+        {
+            <tr>
+                <td class="num">@e.ChainSequence</td>
+                <td>@Fmt.Date(e.OccurredAtUtc)</td>
+                <td class="mono small">@e.Action</td>
+                <td>@e.Summary
+                    @if (!string.IsNullOrEmpty(e.ChangesJson))
+                    {
+                        <details><summary class="small">Changes</summary><pre class="small mono" style="white-space:pre-wrap">@e.ChangesJson</pre></details>
+                    }
+                </td>
+                <td>@e.Source</td>
+                <td class="small mono">@e.UserId?.ToString()[..8] @(e.DeviceId is { } d ? $"/ {d.ToString()[..8]}" : "")</td>
+            </tr>
+        }
+    </tbody>
+</table>
+<Pager Page="@(_page?.Page ?? 1)" TotalPages="@(_page?.TotalPages ?? 0)" TotalCount="@(_page?.TotalCount ?? 0)" PageChanged="GoAsync" />
+
+@code {
+    private PagedResult<AuditEntryDto>? _page;
+    private AuditVerificationResult? _verification;
+    private string? _action;
+    private int _pageNumber = 1;
+
+    protected override Task OnInitializedAsync() => State.HasCompany ? LoadAsync() : Task.CompletedTask;
+
+    private Task ReloadAsync()
+    {
+        _pageNumber = 1;
+        return LoadAsync();
+    }
+
+    private Task GoAsync(int page)
+    {
+        _pageNumber = page;
+        return LoadAsync();
+    }
+
+    private Task LoadAsync() => RunAsync(async () =>
+    {
+        var query = new AuditQuery { Action = _action, Page = _pageNumber, PageSize = 50 };
+        _page = await Runner.RunAsync<AuditService, PagedResult<AuditEntryDto>>(s => s.ListAsync(State.CompanyId, query));
+    });
+
+    private Task VerifyAsync() => RunAsync(async () =>
+        _verification = await Runner.RunAsync<AuditService, AuditVerificationResult>(s => s.VerifyAsync(State.CompanyId)));
+}

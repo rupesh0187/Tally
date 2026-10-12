@@ -1,0 +1,89 @@
+@page "/reports/trial-balance"
+@inherits AppPage
+
+<PageTitle>Trial Balance — TallyNext</PageTitle>
+
+<div class="page-head">
+    <div><h1>Trial Balance</h1><div class="muted">@Fmt.Date(_from) to @Fmt.Date(_to)</div></div>
+    <PeriodBar From="_from" To="_to" Year="State.CurrentYear" OnChange="ApplyAsync" />
+</div>
+<div class="toolbar" style="margin-bottom:.5rem">
+    <label class="small"><input type="checkbox" @bind="_detailed" /> Show ledgers</label>
+    <label class="small"><input type="checkbox" @bind="_includeZero" @bind:after="LoadAsync" /> Include zero balances</label>
+</div>
+<Alerts Error="@Error" />
+
+@if (_report is { } r)
+{
+    @if (!r.IsBalanced)
+    {
+        <div class="alert error">The trial balance does not agree. This indicates a data problem; please contact support.</div>
+    }
+    else if (r.OpeningDifference != 0)
+    {
+        <div class="alert warn">Opening balances differ by @Fmt.Balance(r.OpeningDifference > 0 ? r.OpeningDifference : 0, r.OpeningDifference < 0 ? -r.OpeningDifference : 0). Correct the ledger opening balances.</div>
+    }
+
+    <table class="data">
+        <thead>
+            <tr><th>Particulars</th><th class="num">Opening</th><th class="num">Debit</th><th class="num">Credit</th><th class="num">Closing</th></tr>
+        </thead>
+        <tbody>
+            @foreach (var row in r.Rows.Where(row => _detailed || row.IsGroup))
+            {
+                <tr class="@(row.IsGroup ? "group" : "clickable")" @onclick="() => Open(row)">
+                    <td class="indent-@Math.Min(row.Depth, 4)">@row.Name</td>
+                    <td class="num">@Fmt.Balance(row.OpeningDebit, row.OpeningCredit)</td>
+                    <td class="num">@Fmt.Amount(row.PeriodDebit)</td>
+                    <td class="num">@Fmt.Amount(row.PeriodCredit)</td>
+                    <td class="num">@Fmt.Balance(row.ClosingDebit, row.ClosingCredit)</td>
+                </tr>
+            }
+        </tbody>
+        <tfoot>
+            <tr class="total"><td>Total</td><td></td><td class="num">@Fmt.AmountOrZero(r.TotalPeriodDebit)</td><td class="num">@Fmt.AmountOrZero(r.TotalPeriodCredit)</td><td class="num">Dr @Fmt.AmountOrZero(r.TotalClosingDebit) / Cr @Fmt.AmountOrZero(r.TotalClosingCredit)</td></tr>
+        </tfoot>
+    </table>
+}
+
+@code {
+    private DateOnly _from;
+    private DateOnly _to;
+    private bool _detailed = true;
+    private bool _includeZero;
+    private TrialBalanceReport? _report;
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (!State.HasCompany)
+        {
+            return;
+        }
+
+        _from = State.PeriodStart;
+        _to = State.Today < State.CurrentYear.End ? State.Today : State.CurrentYear.End;
+        if (_to < _from)
+        {
+            _to = _from;
+        }
+
+        await LoadAsync();
+    }
+
+    private void Open(TrialBalanceRow row)
+    {
+        if (!row.IsGroup)
+        {
+            Nav.NavigateTo($"reports/ledger?ledger={row.Id}");
+        }
+    }
+
+    private Task ApplyAsync((DateOnly From, DateOnly To) range)
+    {
+        (_from, _to) = range;
+        return LoadAsync();
+    }
+
+    private Task LoadAsync() => RunAsync(async () =>
+        _report = await Runner.RunAsync<ReportService, TrialBalanceReport>(s => s.TrialBalanceAsync(State.CompanyId, _from, _to, _includeZero)));
+}

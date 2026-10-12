@@ -1,0 +1,62 @@
+@page "/reports/profit-and-loss"
+@inherits AppPage
+
+<PageTitle>Profit &amp; Loss — TallyNext</PageTitle>
+
+<div class="page-head">
+    <div><h1>Profit &amp; Loss</h1><div class="muted">@Fmt.Date(_from) to @Fmt.Date(_to)</div></div>
+    <PeriodBar From="_from" To="_to" Year="State.CurrentYear" OnChange="ApplyAsync" />
+</div>
+<Alerts Error="@Error" />
+
+@if (_report is { } r)
+{
+    @if (r.ExcludesInventory)
+    {
+        <div class="alert warn">Inventory valuation is not included yet: opening and closing stock are not part of gross profit.</div>
+    }
+    <div class="statement">
+        <div>
+            <StatementTable Title="Trading income" Section="r.TradingIncome" />
+            <StatementTable Title="Direct costs" Section="r.DirectCosts" />
+            <table class="data"><tbody><tr class="total"><td>@(r.GrossProfit >= 0 ? "Gross profit" : "Gross loss")</td><td class="num">@Fmt.AmountOrZero(Math.Abs(r.GrossProfit))</td></tr></tbody></table>
+        </div>
+        <div>
+            <StatementTable Title="Indirect incomes" Section="r.IndirectIncomes" />
+            <StatementTable Title="Indirect expenses" Section="r.IndirectExpenses" />
+            <table class="data"><tbody><tr class="total"><td>@(r.NetProfit >= 0 ? "Net profit" : "Net loss")</td><td class="num">@Fmt.AmountOrZero(Math.Abs(r.NetProfit))</td></tr></tbody></table>
+        </div>
+    </div>
+}
+
+@code {
+    private DateOnly _from;
+    private DateOnly _to;
+    private ProfitAndLossReport? _report;
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (!State.HasCompany)
+        {
+            return;
+        }
+
+        _from = State.PeriodStart;
+        _to = State.Today < State.CurrentYear.End ? State.Today : State.CurrentYear.End;
+        if (_to < _from)
+        {
+            _to = _from;
+        }
+
+        await LoadAsync();
+    }
+
+    private Task ApplyAsync((DateOnly From, DateOnly To) range)
+    {
+        (_from, _to) = range;
+        return LoadAsync();
+    }
+
+    private Task LoadAsync() => RunAsync(async () =>
+        _report = await Runner.RunAsync<ReportService, ProfitAndLossReport>(s => s.ProfitAndLossAsync(State.CompanyId, _from, _to)));
+}

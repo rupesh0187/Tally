@@ -1,0 +1,27 @@
+<Router AppAssembly="typeof(Program).Assembly" AdditionalAssemblies="new[] { typeof(UiAssembly).Assembly }" NotFoundPage="typeof(TallyNext.UI.Pages.NotFound)">
+    <Found Context="routeData">
+        @if (IsAnonymousPage(routeData))
+        {
+            <RouteView RouteData="routeData" />
+        }
+        else
+        {
+            <AuthorizeView>
+                <Authorized>
+                    <SessionBootstrap>
+                        <RouteView RouteData="routeData" DefaultLayout="typeof(MainLayout)" />
+                        <FocusOnNavigate RouteData="routeData" Selector="h1" />
+                    </SessionBootstrap>
+                </Authorized>
+                <NotAuthorized>
+                    <RedirectToLogin />
+                </NotAuthorized>
+            </AuthorizeView>
+        }
+    </Found>
+</Router>
+
+@code {
+    private static bool IsAnonymousPage(RouteData routeData) =>
+        Attribute.IsDefined(routeData.PageType, typeof(Microsoft.AspNetCore.Authorization.AllowAnonymousAttribute));
+}

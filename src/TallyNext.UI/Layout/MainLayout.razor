@@ -1,0 +1,136 @@
+@inherits LayoutComponentBase
+@implements IAsyncDisposable
+@inject IJSRuntime JS
+@inject NavigationManager Nav
+@inject KeyboardShortcuts Shortcuts
+@inject AppState State
+
+<div class="tn-shell">
+    <aside class="tn-sidebar" aria-label="Main navigation">
+        <div class="tn-brand"><span class="mark" aria-hidden="true">TN</span> TallyNext</div>
+        <NavMenu />
+    </aside>
+    <header class="tn-topbar">
+        <TopBar OnHelp="() => showHelp = true" />
+    </header>
+    <main class="tn-main" id="main" tabindex="-1">
+        @Body
+    </main>
+</div>
+
+@if (showHelp)
+{
+    <div class="card" role="dialog" aria-modal="true" aria-labelledby="help-title"
+         style="position:fixed; right:1.5rem; bottom:1.5rem; width:360px; z-index:50; box-shadow:0 12px 32px rgba(0,0,0,.25)">
+        <div class="page-head" style="margin-bottom:.5rem">
+            <h2 id="help-title" style="margin:0">Keyboard shortcuts</h2>
+            <button class="btn small" @onclick="() => showHelp = false">Close</button>
+        </div>
+        <table class="data">
+            <tbody>
+                @foreach (var (keys, action) in KeyboardShortcuts.Help)
+                {
+                    <tr><td><kbd>@keys</kbd></td><td>@action</td></tr>
+                }
+            </tbody>
+        </table>
+    </div>
+}
+
+@code {
+    private IJSObjectReference? _module;
+    private DotNetObjectReference<MainLayout>? _self;
+    private bool showHelp;
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender)
+        {
+            return;
+        }
+
+        try
+        {
+            _module = await JS.InvokeAsync<IJSObjectReference>("import", "./_content/TallyNext.UI/tallynext.js");
+            _self = DotNetObjectReference.Create(this);
+            await _module.InvokeVoidAsync("register", _self);
+        }
+        catch (JSDisconnectedException)
+        {
+            // The circuit closed while starting.
+        }
+    }
+
+    [JSInvokable]
+    public async Task OnShortcut(string key)
+    {
+        if (await Shortcuts.DispatchAsync(key))
+        {
+            return;
+        }
+
+        await InvokeAsync(async () =>
+        {
+            var target = key switch
+            {
+                "F4" => "vouchers/new/contra",
+                "F5" => "vouchers/new/payment",
+                "F6" => "vouchers/new/receipt",
+                "F7" => "vouchers/new/journal",
+                "F8" => "vouchers/new/sales",
+                "F9" => "vouchers/new/purchase",
+                "Alt+F6" => "vouchers/new/credit-note",
+                "Alt+F5" => "vouchers/new/debit-note",
+                "Alt+D" => "reports/day-book",
+                "Alt+L" => "masters/ledgers",
+                "Alt+T" => "reports/trial-balance",
+                "Alt+P" => "reports/profit-and-loss",
+                "Alt+B" => "reports/balance-sheet",
+                "Alt+V" => "vouchers",
+                "Alt+S" => "sync",
+                "Alt+C" => "companies",
+                _ => null,
+            };
+
+            if (target is not null)
+            {
+                Nav.NavigateTo(target);
+            }
+            else if (key == "F1")
+            {
+                showHelp = !showHelp;
+                StateHasChanged();
+            }
+            else if (key == "Escape")
+            {
+                if (showHelp)
+                {
+                    showHelp = false;
+                    StateHasChanged();
+                }
+                else if (_module is not null)
+                {
+                    await _module.InvokeVoidAsync("back");
+                }
+            }
+        });
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        try
+        {
+            if (_module is not null)
+            {
+                await _module.InvokeVoidAsync("unregister");
+                await _module.DisposeAsync();
+            }
+        }
+        catch (JSDisconnectedException)
+        {
+            // The browser is already gone.
+        }
+
+        _self?.Dispose();
+    }
+}

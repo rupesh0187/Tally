@@ -1,0 +1,454 @@
+@page "/vouchers/new/{Slug}"
+@page "/vouchers/{EditId:guid}/edit"
+@inherits AppPage
+@inject IJSRuntime JS
+@inject IServiceProvider Services
+
+<PageTitle>@(_type?.Name ?? "Voucher") — TallyNext</PageTitle>
+
+<div class="voucher" @ref="_container">
+    <div class="page-head">
+        <div>
+            <div class="voucher-type-badge">@(_type?.Name ?? "Voucher") <span class="muted small">@(EditId is null ? "new" : "draft")</span></div>
+            <div class="muted small">@Hint</div>
+        </div>
+        <div class="muted small">Enter = next field · Ctrl+S = save · Esc = back</div>
+    </div>
+
+    <Alerts Error="@Error" Notice="@Notice" />
+
+    @if (_types.Count > 0 && _type is not null)
+    {
+        <div class="card">
+            <div class="voucher-head">
+                <label class="field">Voucher type
+                    <select class="input" value="@_type.Id" @onchange="ChangeTypeAsync" disabled="@(EditId is not null)">
+                        @foreach (var t in _types.Where(t => t.IsActive))
+                        {
+                            <option value="@t.Id">@t.Name (@VoucherSlugs.ShortcutOf(t.BaseType))</option>
+                        }
+                    </select>
+                </label>
+                <label class="field">Date
+                    <input id="v-date" class="input" type="date" value="@Fmt.Iso(_date)" @onchange="SetDate" data-next="@LedgerId(0)" />
+                </label>
+                <label class="field">Reference (optional)
+                    <input class="input" @bind="_reference" maxlength="100" />
+                </label>
+                <div class="muted small">Number is assigned when posted<br />FY @FinancialYear.Containing(_date, State.Company!.FinancialYearStartMonth).Label</div>
+            </div>
+
+            <div class="lines" role="table" aria-label="Voucher lines">
+                <div class="line head" role="row"><span role="columnheader">Dr / Cr</span><span role="columnheader">Particulars</span><span role="columnheader" class="num">Amount</span><span></span></div>
+                @for (var i = 0; i < _lines.Count; i++)
+                {
+                    var index = i;
+                    var line = _lines[i];
+                    <div class="line" role="row">
+                        <button type="button" class="side-toggle @(line.Side == DrCr.Debit ? "dr" : "cr")" @onclick="() => Toggle(index)"
+                                aria-label="@($"Line {index + 1}: {(line.Side == DrCr.Debit ? "debit" : "credit")}, press to switch")">@line.Side.ToShortLabel()</button>
+                        <LedgerPicker Id="@LedgerId(index)" CompanyId="State.CompanyId" Value="line.LedgerId" ValueChanged="id => LedgerChosen(index, id)"
+                                      NextId="@AmountId(index)" Filter="FilterFor(line)" OnCommitted="() => FocusAsync(AmountId(index))"
+                                      Invalid="@(_showValidation && line.LedgerId is null && line.HasContent)" Label="@($"Ledger for line {index + 1}")" />
+                        <input id="@AmountId(index)" class="input num @(_showValidation && line.LedgerId is not null && !line.HasAmount ? "invalid" : "")"
+                               inputmode="decimal" aria-label="@($"Amount for line {index + 1}")"
+                               value="@line.AmountText" @oninput="e => line.AmountText = e.Value?.ToString() ?? string.Empty"
+                               data-next="@NextAfterAmount(index)" @onkeydown="e => AmountKeyDownAsync(e, index)" />
+                        <button type="button" class="btn small" title="Remove line" disabled="@(_lines.Count <= 2)" @onclick="() => Remove(index)"
+                                aria-label="@($"Remove line {index + 1}")">✕</button>
+                    </div>
+                }
+            </div>
+            <button type="button" class="btn small" style="margin-top:.5rem" @onclick="() => AddLineAsync(null)">+ Add line</button>
+
+            <div class="totals">
+                <span class="muted">Totals</span>
+                <span class="num">Dr @Fmt.AmountOrZero(TotalDebit)</span>
+                <span class="num">Cr @Fmt.AmountOrZero(TotalCredit)</span>
+            </div>
+            <div class="totals" aria-live="polite">
+                <span></span>
+                <span class="num @(Difference == 0 && TotalDebit > 0 ? "balanced" : Difference == 0 ? "muted" : "diff")" style="grid-column: span 2">
+                    @(Difference == 0 ? (TotalDebit > 0 ? "Balanced" : "Enter the amounts") : $"Difference {Fmt.AmountOrZero(Math.Abs(Difference))} {(Difference > 0 ? "Dr" : "Cr")}")
+                </span>
+            </div>
+
+            <label class="field" style="margin-top:1rem">Narration
+                <textarea id="v-narration" class="input" rows="2" maxlength="1000" @bind="_narration" @bind:event="oninput" @onkeydown="NarrationKeyDownAsync"></textarea>
+            </label>
+            <div class="form-actions">
+                <button id="v-save" class="btn primary" disabled="@Busy" @onclick="() => SaveAsync(post: true)">Save <kbd>Ctrl+S</kbd></button>
+                <button class="btn" disabled="@Busy" @onclick="() => SaveAsync(post: false)">Save as draft</button>
+                <button class="btn" disabled="@Busy" @onclick="ResetAsync">Clear</button>
+            </div>
+        </div>
+
+        @if (_recent.Count > 0)
+        {
+            <h2>Saved in this session</h2>
+            <table class="data">
+                <thead><tr><th>Date</th><th>No.</th><th>Type</th><th class="num">Amount</th><th>Status</th></tr></thead>
+                <tbody>
+                    @foreach (var v in _recent)
+                    {
+                        <tr class="clickable" @onclick='() => Nav.NavigateTo($"vouchers/{v.Id}")'>
+                            <td>@Fmt.Date(v.Date)</td><td>@(v.Number ?? "—")</td><td>@v.VoucherTypeName</td><td class="num">@Fmt.AmountOrZero(v.Total)</td><td>@v.Status</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        }
+    }
+</div>
+
+@code {
+    private sealed class LineModel
+    {
+        public DrCr Side { get; set; } = DrCr.Debit;
+
+        public Guid? LedgerId { get; set; }
+
+        public string AmountText { get; set; } = string.Empty;
+
+        public decimal? Amount => Fmt.ParseAmount(AmountText);
+
+        public bool HasAmount => Amount is > 0;
+
+        public bool HasContent => HasAmount || LedgerId is not null;
+    }
+
+    private IReadOnlyList<VoucherTypeDto> _types = [];
+    private VoucherTypeDto? _type;
+    private readonly List<LineModel> _lines = [];
+    private readonly List<VoucherDto> _recent = [];
+    private DateOnly _date;
+    private string? _reference;
+    private string? _narration;
+    private bool _showValidation;
+    private Guid _pendingId = Ids.New();
+    private IJSObjectReference? _module;
+    private ElementReference _container;
+    private bool _enterNavigation;
+    private bool _lastAmountHadClientTarget;
+    private bool _focusDate;
+
+    [Parameter]
+    public string? Slug { get; set; }
+
+    [Parameter]
+    public Guid? EditId { get; set; }
+
+    private decimal TotalDebit => _lines.Where(l => l.Side == DrCr.Debit).Sum(l => l.Amount ?? 0);
+
+    private decimal TotalCredit => _lines.Where(l => l.Side == DrCr.Credit).Sum(l => l.Amount ?? 0);
+
+    private decimal Difference => TotalDebit - TotalCredit;
+
+    private string Hint => _type?.BaseType switch
+    {
+        VoucherBaseType.Contra => "Transfers between cash and bank accounts only.",
+        VoucherBaseType.Payment => "Money paid out: credit a cash or bank ledger.",
+        VoucherBaseType.Receipt => "Money received: debit a cash or bank ledger.",
+        VoucherBaseType.Journal => "Adjustments that do not involve cash or bank.",
+        VoucherBaseType.Sales => "Credit a ledger under Sales Accounts.",
+        VoucherBaseType.Purchase => "Debit a ledger under Purchase Accounts.",
+        VoucherBaseType.CreditNote => "Sales return: debit a ledger under Sales Accounts.",
+        VoucherBaseType.DebitNote => "Purchase return: credit a ledger under Purchase Accounts.",
+        _ => string.Empty,
+    };
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (!State.HasCompany)
+        {
+            return;
+        }
+
+        await RunAsync(async () =>
+        {
+            _types = await Runner.RunAsync<VoucherService, IReadOnlyList<VoucherTypeDto>>(s => s.ListTypesAsync(State.CompanyId));
+            if (EditId is { } id)
+            {
+                var voucher = await Runner.RunAsync<VoucherService, VoucherDto>(s => s.GetAsync(State.CompanyId, id));
+                if (voucher.Status != VoucherStatus.Draft)
+                {
+                    Nav.NavigateTo($"vouchers/{id}");
+                    return;
+                }
+
+                _type = _types.First(t => t.Id == voucher.VoucherTypeId);
+                _date = voucher.Date;
+                _reference = voucher.Reference;
+                _narration = voucher.Narration;
+                _lines.Clear();
+                _lines.AddRange(voucher.Lines.Select(l => new LineModel { Side = l.Side, LedgerId = l.LedgerId, AmountText = l.Amount.ToString("0.00", CultureInfo.InvariantCulture) }));
+            }
+            else
+            {
+                var baseType = VoucherSlugs.Parse(Slug) ?? VoucherBaseType.Journal;
+                _type = _types.FirstOrDefault(t => t.BaseType == baseType && t.IsSystem) ?? _types.First();
+                if (_date == default)
+                {
+                    _date = State.Today < State.Company!.BooksBeginningDate ? State.Company.BooksBeginningDate : State.Today;
+                }
+
+                StartLines();
+            }
+
+            _focusDate = true;
+        });
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            _module = await JS.InvokeAsync<IJSObjectReference>("import", "./_content/TallyNext.UI/tallynext.js");
+        }
+
+        if (_module is not null && !_enterNavigation && _type is not null)
+        {
+            _enterNavigation = true;
+            await _module.InvokeVoidAsync("enableEnterNavigation", _container);
+        }
+
+        if (_focusDate && _module is not null && _type is not null)
+        {
+            _focusDate = false;
+            await _module.InvokeAsync<bool>("focus", "v-date");
+        }
+    }
+
+    protected override async Task<bool> HandleShortcutAsync(string key)
+    {
+        if (key is "Ctrl+S" or "Ctrl+Enter")
+        {
+            await InvokeAsync(() => SaveAsync(post: true));
+            return true;
+        }
+
+        return false;
+    }
+
+    private static string LedgerId(int index) => $"l{index}-ledger";
+
+    private static string AmountId(int index) => $"l{index}-amount";
+
+    private void StartLines()
+    {
+        _lines.Clear();
+        var first = _type!.BaseType switch
+        {
+            VoucherBaseType.Receipt or VoucherBaseType.Purchase or VoucherBaseType.CreditNote => DrCr.Credit,
+            _ => DrCr.Debit,
+        };
+        _lines.Add(new LineModel { Side = first });
+        _lines.Add(new LineModel { Side = first.Opposite() });
+        _showValidation = false;
+    }
+
+    private Func<LedgerLookupItem, bool>? FilterFor(LineModel line) => _type?.BaseType switch
+    {
+        VoucherBaseType.Contra => l => l.Traits.HasFlag(LedgerTraits.CashOrBank),
+        VoucherBaseType.Journal => l => !l.Traits.HasFlag(LedgerTraits.CashOrBank),
+        _ => null,
+    };
+
+    private async Task ChangeTypeAsync(ChangeEventArgs e)
+    {
+        if (Guid.TryParse(e.Value?.ToString(), out var id) && _types.FirstOrDefault(t => t.Id == id) is { } type)
+        {
+            _type = type;
+            Nav.NavigateTo($"vouchers/new/{VoucherSlugs.Of(type.BaseType)}", replace: true);
+            StartLines();
+            await FocusAsync("v-date");
+        }
+    }
+
+    private void SetDate(ChangeEventArgs e)
+    {
+        if (DateOnly.TryParse(e.Value?.ToString(), CultureInfo.InvariantCulture, out var d))
+        {
+            _date = d;
+        }
+    }
+
+    private void Toggle(int index) => _lines[index].Side = _lines[index].Side.Opposite();
+
+    private void Remove(int index)
+    {
+        if (_lines.Count > 2)
+        {
+            _lines.RemoveAt(index);
+        }
+    }
+
+    /// <summary>
+    /// When a ledger is chosen for a line with no amount yet, offer the amount that balances the voucher on this
+    /// line's side (the amount field selects its text on focus, so typing replaces the suggestion).
+    /// </summary>
+    private void LedgerChosen(int index, Guid? ledgerId)
+    {
+        var line = _lines[index];
+        line.LedgerId = ledgerId;
+        if (ledgerId is null || !string.IsNullOrWhiteSpace(line.AmountText))
+        {
+            return;
+        }
+
+        var needed = line.Side == DrCr.Debit ? -Difference : Difference;
+        if (needed > 0)
+        {
+            line.AmountText = needed.ToString("0.00", CultureInfo.InvariantCulture);
+        }
+    }
+
+    /// <summary>Client-side Enter target for an amount field; null when the server must decide (adding a line).</summary>
+    private string? NextAfterAmount(int index)
+    {
+        if (index < _lines.Count - 1)
+        {
+            return LedgerId(index + 1);
+        }
+
+        var target = Difference == 0 && TotalDebit > 0 ? "v-narration" : null;
+        _lastAmountHadClientTarget = target is not null;
+        return target;
+    }
+
+    private async Task AmountKeyDownAsync(KeyboardEventArgs e, int index)
+    {
+        // Moves to the next line or the narration happen client-side (data-next); the server only adds the
+        // balancing line when Enter is pressed on the last, still unbalanced, line.
+        if (e.Key != "Enter" || index != _lines.Count - 1)
+        {
+            return;
+        }
+
+        if (Difference != 0)
+        {
+            await AddLineAsync(Difference > 0 ? DrCr.Credit : DrCr.Debit);
+        }
+        else if (!_lastAmountHadClientTarget)
+        {
+            // The browser had no target when Enter was pressed (the balancing amount arrived afterwards).
+            await FocusAsync("v-narration");
+        }
+    }
+
+    private async Task AddLineAsync(DrCr? side)
+    {
+        var resolved = side ?? (Difference > 0 ? DrCr.Credit : Difference < 0 ? DrCr.Debit : _lines[^1].Side.Opposite());
+        _lines.Add(new LineModel { Side = resolved });
+        StateHasChanged();
+        await FocusAsync(LedgerId(_lines.Count - 1));
+    }
+
+    private async Task NarrationKeyDownAsync(KeyboardEventArgs e)
+    {
+        // Plain Enter saves; Shift+Enter is a new line; Ctrl/Alt+Enter is the global save shortcut (handled once there).
+        if (e.Key == "Enter" && !e.ShiftKey && !e.CtrlKey && !e.AltKey && !e.MetaKey)
+        {
+            await SaveAsync(post: true);
+        }
+    }
+
+    private async Task FocusAsync(string id)
+    {
+        if (_module is not null)
+        {
+            await Task.Yield();
+            await _module.InvokeAsync<bool>("focus", id);
+        }
+    }
+
+    private async Task SaveAsync(bool post)
+    {
+        if (Busy || _type is null)
+        {
+            return;
+        }
+
+        _showValidation = true;
+        Notice = null;
+        var filled = _lines.Where(l => l.HasContent).ToList();
+        if (filled.Any(l => l.LedgerId is null || !l.HasAmount))
+        {
+            Error = "Every line needs a ledger and an amount greater than zero.";
+            return;
+        }
+
+        if (post && (filled.Count < 2 || Difference != 0))
+        {
+            Error = filled.Count < 2
+                ? "A voucher needs at least one debit and one credit line."
+                : $"Debit and credit totals differ by {Fmt.AmountOrZero(Math.Abs(Difference))}.";
+            return;
+        }
+
+        var input = new VoucherInput
+        {
+            Id = EditId is null ? _pendingId : null,
+            VoucherTypeId = _type.Id,
+            Date = _date,
+            Reference = _reference,
+            Narration = _narration,
+            Post = post,
+            Lines = filled.Select(l => new VoucherLineInput { LedgerId = l.LedgerId!.Value, Side = l.Side, Amount = l.Amount!.Value }).ToList(),
+        };
+
+        VoucherDto? saved = null;
+        var ok = await RunAsync(async () =>
+        {
+            saved = EditId is { } id
+                ? await Runner.RunAsync<VoucherService, VoucherDto>(s => s.UpdateDraftAsync(State.CompanyId, id, input))
+                : await Runner.RunAsync<VoucherService, VoucherDto>(s => s.CreateAsync(State.CompanyId, input));
+        });
+
+        if (!ok || saved is null)
+        {
+            return;
+        }
+
+        if (Services.GetService(typeof(ISyncPanel)) is ISyncPanel sync)
+        {
+            await sync.RefreshAsync();
+        }
+
+        if (EditId is not null)
+        {
+            Nav.NavigateTo($"vouchers/{saved.Id}");
+            return;
+        }
+
+        Notice = $"Saved {saved.VoucherTypeName} {saved.Number ?? "(draft)"} dated {Fmt.Date(saved.Date)} for {Fmt.AmountOrZero(saved.Total)}.";
+        _recent.Insert(0, saved);
+        if (_recent.Count > 10)
+        {
+            _recent.RemoveAt(_recent.Count - 1);
+        }
+
+        _pendingId = Ids.New();
+        _reference = null;
+        _narration = null;
+        StartLines();
+        _focusDate = true;
+    }
+
+    private Task ResetAsync()
+    {
+        _pendingId = Ids.New();
+        _reference = null;
+        _narration = null;
+        Error = null;
+        Notice = null;
+        StartLines();
+        return FocusAsync("v-date");
+    }
+
+    public override void Dispose()
+    {
+        base.Dispose();
+        _ = _module?.DisposeAsync().AsTask().ContinueWith(_ => { }, TaskScheduler.Default);
+    }
+}

@@ -1,0 +1,95 @@
+@page "/"
+@inherits AppPage
+
+<PageTitle>Dashboard — TallyNext</PageTitle>
+
+@if (State.Company is { } company)
+{
+    <div class="page-head">
+        <div><h1>@company.Name</h1><div class="muted">Financial year @State.CurrentYear.Label · books from @Fmt.Date(company.BooksBeginningDate)</div></div>
+        <div class="toolbar">
+            @if (State.Can(Permission.VoucherCreate))
+            {
+                <a class="btn primary" href="vouchers/new/payment">Payment <kbd>F5</kbd></a>
+                <a class="btn" href="vouchers/new/receipt">Receipt <kbd>F6</kbd></a>
+                <a class="btn" href="vouchers/new/journal">Journal <kbd>F7</kbd></a>
+            }
+        </div>
+    </div>
+    <Alerts Error="@Error" />
+
+    <div class="grid cols-4">
+        <div class="card stat"><div class="label">Cash &amp; bank balance</div><div class="value">@State.CurrencySymbol @Fmt.AmountOrZero(_cashBank.Sum(r => r.ClosingDebit - r.ClosingCredit))</div></div>
+        <div class="card stat"><div class="label">Gross profit, year to date</div><div class="value">@State.CurrencySymbol @Fmt.AmountOrZero(_profit?.GrossProfit ?? 0)</div></div>
+        <div class="card stat"><div class="label">Net profit, year to date</div><div class="value">@State.CurrencySymbol @Fmt.AmountOrZero(_profit?.NetProfit ?? 0)</div></div>
+        <div class="card stat"><div class="label">Vouchers this year</div><div class="value">@(_dayBook?.Rows.TotalCount ?? 0)</div></div>
+    </div>
+
+    <div class="grid cols-2" style="margin-top:1rem">
+        <div class="card">
+            <h2 style="margin-top:0">Recent vouchers</h2>
+            <table class="data">
+                <tbody>
+                    @foreach (var v in _recent)
+                    {
+                        <tr class="clickable" @onclick='() => Nav.NavigateTo($"vouchers/{v.Id}")'>
+                            <td>@Fmt.Date(v.Date)</td><td>@v.VoucherTypeName @v.Number</td><td>@v.Particulars</td><td class="num">@Fmt.AmountOrZero(v.Total)</td>
+                        </tr>
+                    }
+                    @if (_recent.Count == 0)
+                    {
+                        <tr><td class="muted">No vouchers yet.</td></tr>
+                    }
+                </tbody>
+            </table>
+            <p><a href="vouchers">Open the voucher register</a></p>
+        </div>
+        <div class="card">
+            <h2 style="margin-top:0">Cash &amp; bank accounts</h2>
+            <table class="data">
+                <tbody>
+                    @foreach (var row in _cashBank)
+                    {
+                        <tr class="clickable" @onclick='() => Nav.NavigateTo($"reports/ledger?ledger={row.Id}")'>
+                            <td>@row.Name</td><td class="num">@Fmt.Balance(row.ClosingDebit, row.ClosingCredit)</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+            <h2>Keyboard</h2>
+            <table class="data">
+                <tbody>
+                    @foreach (var (keys, action) in KeyboardShortcuts.Help.Take(8))
+                    {
+                        <tr><td><kbd>@keys</kbd></td><td>@action</td></tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    </div>
+}
+
+@code {
+    private IReadOnlyList<TrialBalanceRow> _cashBank = [];
+    private ProfitAndLossReport? _profit;
+    private DayBookReport? _dayBook;
+    private IReadOnlyList<VoucherListItem> _recent = [];
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (!State.HasCompany)
+        {
+            return;
+        }
+
+        var from = State.PeriodStart;
+        var to = State.Today < from ? from : State.Today;
+        await RunAsync(async () =>
+        {
+            _cashBank = await Runner.RunAsync<ReportService, IReadOnlyList<TrialBalanceRow>>(s => s.CashAndBankSummaryAsync(State.CompanyId, from, to));
+            _profit = await Runner.RunAsync<ReportService, ProfitAndLossReport>(s => s.ProfitAndLossAsync(State.CompanyId, from, to));
+            _dayBook = await Runner.RunAsync<ReportService, DayBookReport>(s => s.DayBookAsync(State.CompanyId, from, to, 1, 1, false));
+            _recent = (await Runner.RunAsync<VoucherService, PagedResult<VoucherListItem>>(s => s.ListAsync(State.CompanyId, new VoucherQuery { PageSize = 8 }))).Items;
+        });
+    }
+}

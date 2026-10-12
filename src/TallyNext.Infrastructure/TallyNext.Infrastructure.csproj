@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Provider-neutral persistence: shared EF Core model, audit hash chain, sync snapshot mapping. -->
+  <PropertyGroup>
+    <TargetFramework>$(TallyNextTargetFramework)</TargetFramework>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\TallyNext.Application\TallyNext.Application.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Relational" />
+  </ItemGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="TallyNext.UnitTests" />
+  </ItemGroup>
+</Project>

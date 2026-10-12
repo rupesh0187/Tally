@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!--
+    Central-server persistence (PostgreSQL), ASP.NET Core Identity stores, server change log,
+    sync processing and token issuance. Used by TallyNext.Api and TallyNext.Web.
+  -->
+  <PropertyGroup>
+    <TargetFramework>$(TallyNextTargetFramework)</TargetFramework>
+  </PropertyGroup>
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\TallyNext.Infrastructure\TallyNext.Infrastructure.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" />
+    <!-- SQLite is used only by automated tests (server-on-SQLite mode); production refuses it. -->
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" />
+    <PackageReference Include="Microsoft.AspNetCore.Identity.EntityFrameworkCore" />
+    <PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Design">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
+  </ItemGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="TallyNext.IntegrationTests" />
+    <InternalsVisibleTo Include="TallyNext.SyncTests" />
+  </ItemGroup>
+</Project>

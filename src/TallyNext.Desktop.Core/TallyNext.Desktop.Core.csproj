@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!--
+    Desktop composition without any MAUI dependency: adapters between the shared UI and the offline
+    infrastructure (use-case runner, sign-in, sync panel) and the DI entry point used by the MAUI shell.
+    Kept MAUI-free so it builds and is tested on any machine with the .NET SDK.
+  -->
+  <PropertyGroup>
+    <TargetFramework>$(TallyNextTargetFramework)</TargetFramework>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\TallyNext.UI\TallyNext.UI.csproj" />
+    <ProjectReference Include="..\TallyNext.Infrastructure.Local\TallyNext.Infrastructure.Local.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="TallyNext.SyncTests" />
+  </ItemGroup>
+</Project>

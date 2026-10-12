@@ -1,0 +1,20 @@
+{
+  "solution": {
+    "path": "TallyNext.sln",
+    "projects": [
+      "src\\TallyNext.Api\\TallyNext.Api.csproj",
+      "src\\TallyNext.Application\\TallyNext.Application.csproj",
+      "src\\TallyNext.Contracts\\TallyNext.Contracts.csproj",
+      "src\\TallyNext.Desktop.Core\\TallyNext.Desktop.Core.csproj",
+      "src\\TallyNext.Domain\\TallyNext.Domain.csproj",
+      "src\\TallyNext.Infrastructure.Local\\TallyNext.Infrastructure.Local.csproj",
+      "src\\TallyNext.Infrastructure.Server\\TallyNext.Infrastructure.Server.csproj",
+      "src\\TallyNext.Infrastructure\\TallyNext.Infrastructure.csproj",
+      "src\\TallyNext.UI\\TallyNext.UI.csproj",
+      "src\\TallyNext.Web\\TallyNext.Web.csproj",
+      "tests\\TallyNext.IntegrationTests\\TallyNext.IntegrationTests.csproj",
+      "tests\\TallyNext.SyncTests\\TallyNext.SyncTests.csproj",
+      "tests\\TallyNext.UnitTests\\TallyNext.UnitTests.csproj"
+    ]
+  }
+}

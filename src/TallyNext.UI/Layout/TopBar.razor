@@ -1,0 +1,58 @@
+@implements IDisposable
+@inject AppState State
+@inject IHostFeatures Host
+@inject IServiceProvider Services
+
+@if (State.Company is { } company)
+{
+    <span class="company">@company.Name</span>
+    <span class="muted small">FY @State.CurrentYear.Label · @company.Role</span>
+}
+else
+{
+    <span class="muted">No company selected</span>
+}
+<span class="spacer"></span>
+@if (_sync is not null)
+{
+    <a class="pill @_sync.Status.Tone" href="sync" title="@(_sync.Status.Message ?? _sync.Status.Label)">
+        @_sync.Status.Label
+        @if (_sync.Status.LastSuccessUtc is { } last)
+        {
+            <span class="muted small">· last @Fmt.Date(last)</span>
+        }
+    </a>
+}
+<button class="btn small" @onclick="OnHelp" title="Keyboard shortcuts (F1)"><kbd>F1</kbd> Help</button>
+<span class="muted small">@State.UserName</span>
+<button class="btn small" @onclick="SignOut">Sign out</button>
+
+@code {
+    private ISyncPanel? _sync;
+
+    [Parameter]
+    public EventCallback OnHelp { get; set; }
+
+    protected override void OnInitialized()
+    {
+        _sync = Services.GetService(typeof(ISyncPanel)) as ISyncPanel;
+        State.Changed += Refresh;
+        if (_sync is not null)
+        {
+            _sync.Changed += Refresh;
+        }
+    }
+
+    private Task SignOut() => Host.SignOutAsync();
+
+    private void Refresh() => _ = InvokeAsync(StateHasChanged);
+
+    public void Dispose()
+    {
+        State.Changed -= Refresh;
+        if (_sync is not null)
+        {
+            _sync.Changed -= Refresh;
+        }
+    }
+}

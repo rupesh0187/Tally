@@ -1,0 +1,25 @@
+@implements IDisposable
+@inject IDesktopSignIn SignIn
+
+@* Root component of the desktop application: sign-in until a user is signed in, then the application. *@
+@if (!SignIn.IsSignedIn)
+{
+    <SignInForm />
+}
+else
+{
+    <Router AppAssembly="typeof(UiAssembly).Assembly" NotFoundPage="typeof(TallyNext.UI.Pages.NotFound)">
+        <Found Context="routeData">
+            <RouteView RouteData="routeData" DefaultLayout="typeof(MainLayout)" />
+            <FocusOnNavigate RouteData="routeData" Selector="h1" />
+        </Found>
+    </Router>
+}
+
+@code {
+    protected override void OnInitialized() => SignIn.Changed += Refresh;
+
+    private void Refresh() => _ = InvokeAsync(StateHasChanged);
+
+    public void Dispose() => SignIn.Changed -= Refresh;
+}

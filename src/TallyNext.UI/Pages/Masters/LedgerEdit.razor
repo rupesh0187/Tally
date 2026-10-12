@@ -1,0 +1,190 @@
+@page "/masters/ledgers/new"
+@page "/masters/ledgers/{Id:guid}"
+@inherits AppPage
+@inject LedgerCache LedgerCache
+
+<PageTitle>@(Id is null ? "New ledger" : _input.Name) — TallyNext</PageTitle>
+
+<div class="page-head">
+    <div><h1>@(Id is null ? "New ledger" : _input.Name)</h1><div class="muted">@(_ledger?.GroupName)</div></div>
+    @if (Id is { } id)
+    {
+        <a class="btn" href="@($"reports/ledger?ledger={id}")">Ledger account</a>
+    }
+</div>
+<Alerts Error="@Error" Notice="@Notice" />
+
+<div class="card">
+    <fieldset disabled="@(!State.Can(Permission.MasterEdit))" style="border:0; padding:0; margin:0">
+        <div class="form-grid">
+            <label class="field">Name * <input class="input" @bind="_input.Name" maxlength="100" autofocus /></label>
+            <label class="field">Alias <input class="input" @bind="_input.Alias" maxlength="100" /></label>
+            <label class="field">Under group *
+                <select class="input" value="@_input.GroupId" @onchange="SetGroup">
+                    <option value="@Guid.Empty">— choose —</option>
+                    @foreach (var g in _groups)
+                    {
+                        <option value="@g.Id">@(new string('·', g.Depth * 2)) @g.Name</option>
+                    }
+                </select>
+            </label>
+            @if (SelectedGroup?.Nature is AccountNature.Asset or AccountNature.Liability)
+            {
+                <label class="field">Opening balance (as at @(State.Company is { } c ? Fmt.Date(c.BooksBeginningDate) : ""))
+                    <input class="input num" inputmode="decimal" value="@_openingText" @onchange="e => _openingText = e.Value?.ToString()" />
+                </label>
+                <label class="field">Dr / Cr
+                    <select class="input" @bind="_input.OpeningSide">
+                        <option value="@DrCr.Debit">Dr</option>
+                        <option value="@DrCr.Credit">Cr</option>
+                    </select>
+                </label>
+            }
+            <label class="field"><span><input type="checkbox" @bind="_input.IsBillWise" /> Maintain bill-wise details</span></label>
+            <label class="field">Credit period (days) <input class="input" type="number" min="0" max="3650" @bind="_input.CreditPeriodDays" /></label>
+        </div>
+
+        <h2>Tax and contact details</h2>
+        <div class="form-grid">
+            <label class="field">GST registration
+                <select class="input" @bind="_input.GstRegistrationType">
+                    @foreach (var t in Enum.GetValues<GstRegistrationType>())
+                    {
+                        <option value="@t">@t</option>
+                    }
+                </select>
+            </label>
+            <label class="field">GSTIN <input class="input mono" @bind="_input.Gstin" maxlength="15" /></label>
+            <label class="field">State
+                <select class="input" @bind="_input.StateCode">
+                    <option value="">—</option>
+                    @foreach (var s in CompanyService.States)
+                    {
+                        <option value="@s.Code">@s.Code — @s.Name</option>
+                    }
+                </select>
+            </label>
+            <label class="field">PAN <input class="input mono" @bind="_input.Pan" maxlength="10" /></label>
+            <label class="field">Address <input class="input" @bind="_input.AddressLine1" maxlength="200" /></label>
+            <label class="field">City <input class="input" @bind="_input.City" maxlength="100" /></label>
+            <label class="field">PIN code <input class="input" @bind="_input.Pincode" maxlength="10" /></label>
+            <label class="field">E-mail <input class="input" type="email" @bind="_input.Email" maxlength="254" /></label>
+            <label class="field">Phone <input class="input" @bind="_input.Phone" maxlength="30" /></label>
+        </div>
+    </fieldset>
+    @if (State.Can(Permission.MasterEdit))
+    {
+        <div class="form-actions">
+            <button class="btn primary" disabled="@Busy" @onclick="SaveAsync">Save <kbd>Ctrl+S</kbd></button>
+            @if (Id is not null && _ledger is { IsSystem: false })
+            {
+                <button class="btn danger" disabled="@Busy" @onclick="DeleteAsync">Delete</button>
+            }
+            <a class="btn" href="masters/ledgers">Back to ledgers</a>
+        </div>
+    }
+</div>
+
+@code {
+    private IReadOnlyList<AccountGroupDto> _groups = [];
+    private LedgerDto? _ledger;
+    private LedgerInput _input = new();
+    private string? _openingText;
+
+    [Parameter]
+    public Guid? Id { get; set; }
+
+    private AccountGroupDto? SelectedGroup => _groups.FirstOrDefault(g => g.Id == _input.GroupId);
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (!State.HasCompany)
+        {
+            return;
+        }
+
+        await RunAsync(async () =>
+        {
+            _groups = await Runner.RunAsync<ChartOfAccountsService, IReadOnlyList<AccountGroupDto>>(s => s.ListGroupsAsync(State.CompanyId));
+            if (Id is { } id)
+            {
+                _ledger = await Runner.RunAsync<ChartOfAccountsService, LedgerDto>(s => s.GetLedgerAsync(State.CompanyId, id));
+                _input = new LedgerInput
+                {
+                    Name = _ledger.Name, Alias = _ledger.Alias, GroupId = _ledger.GroupId, OpeningBalance = _ledger.OpeningBalance, OpeningSide = _ledger.OpeningSide,
+                    IsBillWise = _ledger.IsBillWise, GstRegistrationType = _ledger.GstRegistrationType, Gstin = _ledger.Gstin, StateCode = _ledger.StateCode, Pan = _ledger.Pan,
+                    AddressLine1 = _ledger.AddressLine1, AddressLine2 = _ledger.AddressLine2, City = _ledger.City, Pincode = _ledger.Pincode, Email = _ledger.Email,
+                    Phone = _ledger.Phone, CreditPeriodDays = _ledger.CreditPeriodDays, ExpectedVersion = _ledger.Version,
+                };
+                _openingText = _ledger.OpeningBalance == 0 ? null : _ledger.OpeningBalance.ToString("0.00", CultureInfo.InvariantCulture);
+            }
+            else
+            {
+                _input = new LedgerInput { Id = Ids.New() };
+            }
+        });
+    }
+
+    protected override async Task<bool> HandleShortcutAsync(string key)
+    {
+        if (key is "Ctrl+S" or "Ctrl+Enter" && State.Can(Permission.MasterEdit))
+        {
+            await InvokeAsync(SaveAsync);
+            return true;
+        }
+
+        return false;
+    }
+
+    private void SetGroup(ChangeEventArgs e) => _input.GroupId = Guid.TryParse(e.Value?.ToString(), out var g) ? g : Guid.Empty;
+
+    private async Task SaveAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_openingText))
+        {
+            _input.OpeningBalance = 0;
+        }
+        else if (Fmt.ParseAmount(_openingText) is { } opening)
+        {
+            _input.OpeningBalance = opening;
+        }
+        else
+        {
+            Error = "The opening balance is not a valid amount.";
+            return;
+        }
+
+        if (SelectedGroup?.Nature is AccountNature.Income or AccountNature.Expense)
+        {
+            _input.OpeningBalance = 0;
+        }
+
+        LedgerDto? saved = null;
+        var editingId = Id;
+        if (await RunAsync(async () => saved = editingId is { } id
+                ? await Runner.RunAsync<ChartOfAccountsService, LedgerDto>(s => s.UpdateLedgerAsync(State.CompanyId, id, _input))
+                : await Runner.RunAsync<ChartOfAccountsService, LedgerDto>(s => s.CreateLedgerAsync(State.CompanyId, _input))))
+        {
+            LedgerCache.Invalidate();
+            if (editingId is null)
+            {
+                Nav.NavigateTo($"masters/ledgers/{saved!.Id}");
+            }
+            else
+            {
+                _ledger = saved;
+                _input.ExpectedVersion = saved!.Version;
+                Notice = "Saved.";
+            }
+        }
+    }
+
+    private async Task DeleteAsync()
+    {
+        if (Id is { } id && await RunAsync(() => Runner.RunAsync<ChartOfAccountsService>(s => s.DeleteLedgerAsync(State.CompanyId, id))))
+        {
+            LedgerCache.Invalidate();
+            Nav.NavigateTo("masters/ledgers");
+        }
+    }
+}

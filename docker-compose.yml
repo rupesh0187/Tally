@@ -1,0 +1,29 @@
+# Local development infrastructure. Not for production use.
+#   docker compose up -d        start PostgreSQL on localhost:5433
+#   docker compose down         stop (data is kept in the named volume)
+#   docker compose down -v      stop and delete the development database
+#
+# Port 5433 is used so the container does not clash with a PostgreSQL service installed on the host (5432).
+name: tallynext
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: tallynext
+      POSTGRES_USER: tallynext
+      # Development-only password; override with POSTGRES_PASSWORD in a local .env file.
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-tallynext_dev_only}
+    ports:
+      - "127.0.0.1:5433:5432"
+    volumes:
+      - tallynext-pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U tallynext -d tallynext"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+volumes:
+  tallynext-pg:

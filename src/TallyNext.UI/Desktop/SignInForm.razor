@@ -1,0 +1,53 @@
+@inject IDesktopSignIn SignIn
+
+<div class="signin">
+    <div class="card">
+        <div class="tn-brand" style="color:var(--tn-text); border:0; padding:0; height:auto; margin-bottom:1rem">
+            <span class="mark" aria-hidden="true">TN</span> TallyNext
+        </div>
+        <h1>Sign in</h1>
+        <p class="muted small">The first sign-in on this computer needs the server. Afterwards you can sign in and work offline.</p>
+        <Alerts Error="@_error" />
+        <form @onsubmit="SubmitAsync" @onsubmit:preventDefault>
+            <div class="grid">
+                <label class="field">Server address <input class="input" @bind="_server" placeholder="https://accounts.example.com" autocomplete="url" /></label>
+                <label class="field">E-mail <input class="input" type="email" @bind="_email" autocomplete="username" autofocus /></label>
+                <label class="field">Password <input class="input" type="password" @bind="_password" autocomplete="current-password" /></label>
+                <button class="btn primary" type="submit" disabled="@_busy">@(_busy ? "Signing in…" : "Sign in")</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+@code {
+    private string? _server;
+    private string _email = string.Empty;
+    private string _password = string.Empty;
+    private string? _error;
+    private bool _busy;
+
+    protected override void OnInitialized() => _server = SignIn.DefaultServerUrl;
+
+    private async Task SubmitAsync()
+    {
+        _busy = true;
+        _error = null;
+        try
+        {
+            var result = await SignIn.SignInAsync(_email, _password, string.IsNullOrWhiteSpace(_server) ? null : _server);
+            if (!result.Succeeded)
+            {
+                _error = result.Error;
+            }
+        }
+        catch (ArgumentException ex)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _password = string.Empty;
+            _busy = false;
+        }
+    }
+}

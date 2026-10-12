@@ -1,0 +1,76 @@
+@page "/account/login"
+@attribute [AllowAnonymous]
+@attribute [ExcludeFromInteractiveRouting]
+@inject WebSignInService SignIns
+@inject NavigationManager Navigation
+
+<PageTitle>Sign in — TallyNext</PageTitle>
+
+<div class="signin">
+    <div class="card">
+        <div class="tn-brand" style="color:var(--tn-text); border:0; padding:0; height:auto; margin-bottom:1rem">
+            <span class="mark" aria-hidden="true">TN</span> TallyNext
+        </div>
+        <h1>Sign in</h1>
+        @if (!string.IsNullOrEmpty(_error))
+        {
+            <div class="alert error" role="alert">@_error</div>
+        }
+        <EditForm Model="Input!" method="post" OnValidSubmit="SignInAsync" FormName="login">
+            <DataAnnotationsValidator />
+            <div class="grid">
+                <label class="field">E-mail
+                    <InputText class="input" type="email" @bind-Value="Input!.Email" autocomplete="username" autofocus />
+                    <ValidationMessage For="() => Input!.Email" />
+                </label>
+                <label class="field">Password
+                    <InputText class="input" type="password" @bind-Value="Input!.Password" autocomplete="current-password" />
+                    <ValidationMessage For="() => Input!.Password" />
+                </label>
+                <label class="small"><InputCheckbox @bind-Value="Input!.Remember" /> Keep me signed in on this computer</label>
+                <button class="btn primary" type="submit">Sign in</button>
+            </div>
+        </EditForm>
+    </div>
+</div>
+
+@code {
+    private string? _error;
+
+    [SupplyParameterFromForm]
+    private LoginInput? Input { get; set; }
+
+    [SupplyParameterFromQuery]
+    private string? ReturnUrl { get; set; }
+
+    protected override void OnInitialized() => Input ??= new LoginInput();
+
+    private async Task SignInAsync()
+    {
+        var (succeeded, error) = await SignIns.SignInAsync(Input!.Email, Input.Password, Input.Remember);
+        if (!succeeded)
+        {
+            _error = error;
+            return;
+        }
+
+        Navigation.NavigateTo(SafeReturnUrl(ReturnUrl), forceLoad: true);
+    }
+
+    /// <summary>Only same-site relative paths are followed (no open redirects).</summary>
+    private static string SafeReturnUrl(string? url) =>
+        !string.IsNullOrEmpty(url) && url.StartsWith('/') && !url.StartsWith("//", StringComparison.Ordinal) && !url.StartsWith("/\\", StringComparison.Ordinal)
+            ? url
+            : "/";
+
+    private sealed class LoginInput
+    {
+        [Required, EmailAddress]
+        public string Email { get; set; } = string.Empty;
+
+        [Required]
+        public string Password { get; set; } = string.Empty;
+
+        public bool Remember { get; set; }
+    }
+}

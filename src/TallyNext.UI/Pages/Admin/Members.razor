@@ -1,0 +1,106 @@
+@page "/members"
+@inherits AppPage
+@inject IHostFeatures Host
+
+<PageTitle>Users &amp; roles — TallyNext</PageTitle>
+
+<div class="page-head">
+    <div><h1>Users &amp; roles</h1><div class="muted">Roles apply to this company only</div></div>
+</div>
+<Alerts Error="@Error" Notice="@Notice" />
+
+@if (State.Can(Permission.MemberManage) && Host.CanManageMembers)
+{
+    <div class="card" style="margin-bottom:1rem">
+        <h2 style="margin-top:0">Add a user</h2>
+        <div class="toolbar">
+            <label class="field" style="min-width:280px">E-mail of an existing account <input class="input" type="email" @bind="_add.Email" /></label>
+            <label class="field">Role <RoleSelect @bind-Value="_add.Role" /></label>
+            <button class="btn primary" disabled="@Busy" @onclick="AddAsync">Add</button>
+        </div>
+    </div>
+}
+else if (State.Can(Permission.MemberManage))
+{
+    <div class="alert warn">Users are managed while connected, in the web application.</div>
+}
+
+<table class="data">
+    <thead><tr><th>User</th><th>E-mail</th><th>Role</th><th>Status</th><th></th></tr></thead>
+    <tbody>
+        @foreach (var m in _members)
+        {
+            <tr>
+                <td>@(m.DisplayName ?? "—")</td>
+                <td>@m.Email</td>
+                <td>
+                    @if (State.Can(Permission.MemberManage) && Host.CanManageMembers && m.IsActive)
+                    {
+                        <RoleSelect Value="m.Role" ValueChanged="r => ChangeRoleAsync(m, r)" />
+                    }
+                    else
+                    {
+                        @m.Role
+                    }
+                </td>
+                <td>@(m.IsActive ? "Active" : "Revoked")</td>
+                <td>
+                    @if (State.Can(Permission.MemberManage) && Host.CanManageMembers && m.IsActive)
+                    {
+                        <button class="btn small danger" @onclick="() => RevokeAsync(m)">Revoke</button>
+                    }
+                </td>
+            </tr>
+        }
+    </tbody>
+</table>
+
+<h2>What each role can do</h2>
+<table class="data">
+    <thead><tr><th>Permission</th>@foreach (var r in Enum.GetValues<CompanyRole>()) { <th>@r</th> }</tr></thead>
+    <tbody>
+        @foreach (var p in Enum.GetValues<Permission>())
+        {
+            <tr><td>@p</td>@foreach (var r in Enum.GetValues<CompanyRole>()) { <td>@(RolePermissions.Has(r, p) ? "✓" : "")</td> }</tr>
+        }
+    </tbody>
+</table>
+
+@code {
+    private IReadOnlyList<MemberDto> _members = [];
+    private AddMemberRequest _add = new() { Role = CompanyRole.Accountant };
+
+    protected override Task OnInitializedAsync() => State.HasCompany ? LoadAsync() : Task.CompletedTask;
+
+    private Task LoadAsync() => RunAsync(async () =>
+        _members = await Runner.RunAsync<MembershipService, IReadOnlyList<MemberDto>>(s => s.ListAsync(State.CompanyId)));
+
+    private async Task AddAsync()
+    {
+        if (await RunAsync(() => Runner.RunAsync<MembershipService, MemberDto>(s => s.AddAsync(State.CompanyId, _add))))
+        {
+            Notice = $"{_add.Email} added as {_add.Role}.";
+            _add = new AddMemberRequest { Role = CompanyRole.Accountant };
+            await LoadAsync();
+        }
+    }
+
+    private async Task ChangeRoleAsync(MemberDto member, CompanyRole role)
+    {
+        if (await RunAsync(() => Runner.RunAsync<MembershipService, MemberDto>(s => s.ChangeRoleAsync(State.CompanyId, member.MembershipId, role))))
+        {
+            Notice = $"{member.Email} is now {role}.";
+        }
+
+        await LoadAsync();
+    }
+
+    private async Task RevokeAsync(MemberDto member)
+    {
+        if (await RunAsync(() => Runner.RunAsync<MembershipService>(s => s.RevokeAsync(State.CompanyId, member.MembershipId))))
+        {
+            Notice = $"Access revoked for {member.Email}.";
+            await LoadAsync();
+        }
+    }
+}

@@ -1,0 +1,63 @@
+@page "/reports/cash-bank"
+@inherits AppPage
+
+<PageTitle>Cash &amp; Bank — TallyNext</PageTitle>
+
+<div class="page-head">
+    <div><h1>Cash &amp; Bank</h1><div class="muted">@Fmt.Date(_from) to @Fmt.Date(_to) · select an account for its cash/bank book</div></div>
+    <PeriodBar From="_from" To="_to" Year="State.CurrentYear" OnChange="ApplyAsync" />
+</div>
+<Alerts Error="@Error" />
+
+<table class="data">
+    <thead><tr><th>Account</th><th class="num">Opening</th><th class="num">Inflow (Dr)</th><th class="num">Outflow (Cr)</th><th class="num">Closing</th></tr></thead>
+    <tbody>
+        @foreach (var row in _rows)
+        {
+            <tr class="clickable" @onclick='() => Nav.NavigateTo($"reports/ledger?ledger={row.Id}")'>
+                <td>@row.Name</td>
+                <td class="num">@Fmt.Balance(row.OpeningDebit, row.OpeningCredit)</td>
+                <td class="num">@Fmt.Amount(row.PeriodDebit)</td>
+                <td class="num">@Fmt.Amount(row.PeriodCredit)</td>
+                <td class="num">@Fmt.Balance(row.ClosingDebit, row.ClosingCredit)</td>
+            </tr>
+        }
+    </tbody>
+    <tfoot>
+        <tr class="total"><td>Total</td><td></td><td class="num">@Fmt.AmountOrZero(_rows.Sum(r => r.PeriodDebit))</td><td class="num">@Fmt.AmountOrZero(_rows.Sum(r => r.PeriodCredit))</td><td class="num">@Fmt.Balance(Math.Max(0, Net), Math.Max(0, -Net))</td></tr>
+    </tfoot>
+</table>
+
+@code {
+    private DateOnly _from;
+    private DateOnly _to;
+    private IReadOnlyList<TrialBalanceRow> _rows = [];
+
+    private decimal Net => _rows.Sum(r => r.ClosingDebit - r.ClosingCredit);
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (!State.HasCompany)
+        {
+            return;
+        }
+
+        _from = State.PeriodStart;
+        _to = State.Today < State.CurrentYear.End ? State.Today : State.CurrentYear.End;
+        if (_to < _from)
+        {
+            _to = _from;
+        }
+
+        await LoadAsync();
+    }
+
+    private Task ApplyAsync((DateOnly From, DateOnly To) range)
+    {
+        (_from, _to) = range;
+        return LoadAsync();
+    }
+
+    private Task LoadAsync() => RunAsync(async () =>
+        _rows = await Runner.RunAsync<ReportService, IReadOnlyList<TrialBalanceRow>>(s => s.CashAndBankSummaryAsync(State.CompanyId, _from, _to)));
+}

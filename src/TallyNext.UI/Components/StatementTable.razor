@@ -1,0 +1,35 @@
+@inject NavigationManager Nav
+
+<table class="data" style="margin-bottom:.75rem">
+    <thead><tr><th>@Title</th><th class="num">Amount</th></tr></thead>
+    <tbody>
+        @foreach (var line in Section.Lines)
+        {
+            <tr class="@(line.LedgerId is not null ? "clickable" : line.GroupId is not null || line.Depth == 0 ? "group" : "")" @onclick="() => Open(line)">
+                <td class="indent-@Math.Min(line.Depth, 4)">@line.Name</td>
+                <td class="num">@Fmt.AmountOrZero(line.Amount)</td>
+            </tr>
+        }
+        @if (Section.Lines.Count == 0)
+        {
+            <tr><td colspan="2" class="muted">Nothing in this period.</td></tr>
+        }
+        <tr class="total"><td>Total</td><td class="num">@Fmt.AmountOrZero(Section.Total)</td></tr>
+    </tbody>
+</table>
+
+@code {
+    [Parameter, EditorRequired]
+    public string Title { get; set; } = string.Empty;
+
+    [Parameter, EditorRequired]
+    public StatementSection Section { get; set; } = default!;
+
+    private void Open(StatementLine line)
+    {
+        if (line.LedgerId is { } id)
+        {
+            Nav.NavigateTo($"reports/ledger?ledger={id}");
+        }
+    }
+}

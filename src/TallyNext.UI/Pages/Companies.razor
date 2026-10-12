@@ -1,0 +1,131 @@
+@page "/companies"
+@inherits AppPage
+@inject LedgerCache LedgerCache
+
+<PageTitle>Companies — TallyNext</PageTitle>
+
+<div class="page-head">
+    <div><h1>Select a company</h1><div class="muted">Companies you are a member of</div></div>
+    <button class="btn primary" @onclick="() => _creating = !_creating">@(_creating ? "Close" : "Create company")</button>
+</div>
+<Alerts Error="@Error" Notice="@Notice" />
+
+@if (_creating)
+{
+    <div class="card" style="margin-bottom:1rem">
+        <h2 style="margin-top:0">New company</h2>
+        <div class="form-grid">
+            <label class="field">Company name * <input class="input" @bind="_new.Name" maxlength="100" autofocus /></label>
+            <label class="field">Mailing name <input class="input" @bind="_new.MailingName" maxlength="200" /></label>
+            <label class="field">State
+                <select class="input" @bind="_new.StateCode">
+                    <option value="">—</option>
+                    @foreach (var s in CompanyService.States)
+                    {
+                        <option value="@s.Code">@s.Code — @s.Name</option>
+                    }
+                </select>
+            </label>
+            <label class="field">GSTIN <input class="input mono" @bind="_new.Gstin" maxlength="15" placeholder="optional" /></label>
+            <label class="field">PAN <input class="input mono" @bind="_new.Pan" maxlength="10" placeholder="optional" /></label>
+            <label class="field">City <input class="input" @bind="_new.City" maxlength="100" /></label>
+            <label class="field">Currency
+                <select class="input" @bind="_new.CurrencyCode">
+                    @foreach (var c in CompanyService.SupportedCurrencies)
+                    {
+                        <option value="@c.Code">@c.Code — @c.Name</option>
+                    }
+                </select>
+            </label>
+            <label class="field">Financial year starts in
+                <select class="input" @bind="_new.FinancialYearStartMonth">
+                    @for (var m = 1; m <= 12; m++)
+                    {
+                        <option value="@m">@CultureInfo.InvariantCulture.DateTimeFormat.GetMonthName(m)</option>
+                    }
+                </select>
+            </label>
+            <label class="field">Books beginning from
+                <input class="input" type="date" value="@Fmt.Iso(_new.BooksBeginningDate)" @onchange="SetBooksBeginning" />
+            </label>
+        </div>
+        <p class="muted small">Currency, financial-year start and books-beginning date cannot be changed later.</p>
+        <div class="form-actions"><button class="btn primary" disabled="@Busy" @onclick="CreateAsync">Create</button></div>
+    </div>
+}
+
+<table class="data">
+    <thead><tr><th>Company</th><th>State</th><th>GSTIN</th><th>Books from</th><th>Your role</th><th></th></tr></thead>
+    <tbody>
+        @foreach (var c in _companies)
+        {
+            <tr class="clickable" @onclick="() => Select(c)">
+                <td><strong>@c.Name</strong></td>
+                <td>@(IndianStates.Find(c.StateCode)?.Name ?? "—")</td>
+                <td class="mono">@c.Gstin</td>
+                <td>@Fmt.Date(c.BooksBeginningDate)</td>
+                <td>@c.Role</td>
+                <td>@if (State.Company?.Id == c.Id) { <span class="tag">selected</span> }</td>
+            </tr>
+        }
+        @if (_companies.Count == 0 && !Busy)
+        {
+            <tr><td colspan="6" class="muted">You are not a member of any company yet. Create one to start.</td></tr>
+        }
+    </tbody>
+</table>
+
+@code {
+    private IReadOnlyList<CompanySummaryDto> _companies = [];
+    private bool _creating;
+    private CreateCompanyRequest _new = NewRequest();
+
+    protected override bool RequiresCompany => false;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadAsync();
+        _creating = _companies.Count == 0;
+    }
+
+    private static CreateCompanyRequest NewRequest()
+    {
+        var today = DateOnly.FromDateTime(DateTime.Now);
+        return new CreateCompanyRequest { BooksBeginningDate = FinancialYear.Containing(today, 4).Start, FinancialYearStartMonth = 4, CurrencyCode = "INR", Country = "India" };
+    }
+
+    private Task LoadAsync() => RunAsync(async () =>
+        _companies = await Runner.RunAsync<CompanyService, IReadOnlyList<CompanySummaryDto>>(s => s.ListMineAsync()));
+
+    private void SetBooksBeginning(ChangeEventArgs e)
+    {
+        if (DateOnly.TryParse(e.Value?.ToString(), CultureInfo.InvariantCulture, out var d))
+        {
+            _new.BooksBeginningDate = d;
+        }
+    }
+
+    private void Select(CompanySummaryDto company)
+    {
+        LedgerCache.Invalidate();
+        State.SelectCompany(company);
+        Nav.NavigateTo("");
+    }
+
+    private async Task CreateAsync()
+    {
+        _new.Id ??= Ids.New();
+        CompanyDto? created = null;
+        if (await RunAsync(async () => created = await Runner.RunAsync<CompanyService, CompanyDto>(s => s.CreateAsync(_new))))
+        {
+            Notice = $"Created {created!.Name} with the standard chart of accounts and voucher types.";
+            _creating = false;
+            _new = NewRequest();
+            await LoadAsync();
+            if (_companies.FirstOrDefault(c => c.Id == created.Id) is { } summary)
+            {
+                Select(summary);
+            }
+        }
+    }
+}

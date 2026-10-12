@@ -1,0 +1,103 @@
+@page "/company/settings"
+@inherits AppPage
+
+<PageTitle>Company settings — TallyNext</PageTitle>
+
+<div class="page-head"><div><h1>Company settings</h1><div class="muted">@_company?.Name</div></div></div>
+<Alerts Error="@Error" Notice="@Notice" />
+
+@if (_company is { } c)
+{
+    <div class="card">
+        <h2 style="margin-top:0">Profile</h2>
+        <fieldset disabled="@(!State.Can(Permission.CompanyManage))" style="border:0; padding:0; margin:0">
+            <div class="form-grid">
+                <label class="field">Name <input class="input" @bind="_profile.Name" maxlength="100" /></label>
+                <label class="field">Mailing name <input class="input" @bind="_profile.MailingName" maxlength="200" /></label>
+                <label class="field">Address <input class="input" @bind="_profile.AddressLine1" maxlength="200" /></label>
+                <label class="field">Address (cont.) <input class="input" @bind="_profile.AddressLine2" maxlength="200" /></label>
+                <label class="field">City <input class="input" @bind="_profile.City" maxlength="100" /></label>
+                <label class="field">State
+                    <select class="input" @bind="_profile.StateCode">
+                        <option value="">—</option>
+                        @foreach (var s in CompanyService.States)
+                        {
+                            <option value="@s.Code">@s.Code — @s.Name</option>
+                        }
+                    </select>
+                </label>
+                <label class="field">PIN code <input class="input" @bind="_profile.Pincode" maxlength="10" /></label>
+                <label class="field">GSTIN <input class="input mono" @bind="_profile.Gstin" maxlength="15" /></label>
+                <label class="field">PAN <input class="input mono" @bind="_profile.Pan" maxlength="10" /></label>
+                <label class="field">E-mail <input class="input" @bind="_profile.Email" maxlength="254" /></label>
+                <label class="field">Phone <input class="input" @bind="_profile.Phone" maxlength="30" /></label>
+            </div>
+        </fieldset>
+        <p class="muted small">Currency @c.CurrencyCode · financial year starts in @CultureInfo.InvariantCulture.DateTimeFormat.GetMonthName(c.FinancialYearStartMonth) · books from @Fmt.Date(c.BooksBeginningDate) (fixed)</p>
+        @if (State.Can(Permission.CompanyManage))
+        {
+            <div class="form-actions"><button class="btn primary" disabled="@Busy" @onclick="SaveProfileAsync">Save profile</button></div>
+        }
+    </div>
+
+    <div class="card">
+        <h2 style="margin-top:0">Period lock</h2>
+        <p class="muted">Vouchers dated on or before the lock date cannot be posted or reversed, on any device or in the browser.</p>
+        <div class="toolbar">
+            <label class="field">Locked through
+                <input class="input" type="date" value="@(_lock is { } l ? Fmt.Iso(l) : "")" @onchange="SetLock" disabled="@(!State.Can(Permission.PeriodLock))" />
+            </label>
+            @if (State.Can(Permission.PeriodLock))
+            {
+                <button class="btn primary" disabled="@Busy" @onclick="SaveLockAsync">Apply lock</button>
+                <button class="btn" disabled="@Busy" @onclick="ClearLockAsync">Remove lock</button>
+            }
+        </div>
+    </div>
+}
+
+@code {
+    private CompanyDto? _company;
+    private UpdateCompanyRequest _profile = new();
+    private DateOnly? _lock;
+
+    protected override Task OnInitializedAsync() => State.HasCompany ? LoadAsync() : Task.CompletedTask;
+
+    private Task LoadAsync() => RunAsync(async () =>
+    {
+        _company = await Runner.RunAsync<CompanyService, CompanyDto>(s => s.GetAsync(State.CompanyId));
+        _profile = new UpdateCompanyRequest
+        {
+            Name = _company.Name, MailingName = _company.MailingName, AddressLine1 = _company.AddressLine1, AddressLine2 = _company.AddressLine2,
+            City = _company.City, StateCode = _company.StateCode, Pincode = _company.Pincode, Country = _company.Country, Gstin = _company.Gstin,
+            Pan = _company.Pan, Email = _company.Email, Phone = _company.Phone, ExpectedVersion = _company.Version,
+        };
+        _lock = _company.LockedThroughDate;
+    });
+
+    private void SetLock(ChangeEventArgs e) =>
+        _lock = DateOnly.TryParse(e.Value?.ToString(), CultureInfo.InvariantCulture, out var d) ? d : null;
+
+    private async Task SaveProfileAsync()
+    {
+        if (await RunAsync(async () => _company = await Runner.RunAsync<CompanyService, CompanyDto>(s => s.UpdateAsync(State.CompanyId, _profile))))
+        {
+            Notice = "Company profile saved.";
+            _profile.ExpectedVersion = _company!.Version;
+        }
+    }
+
+    private Task SaveLockAsync() => ApplyLockAsync(_lock);
+
+    private Task ClearLockAsync() => ApplyLockAsync(null);
+
+    private async Task ApplyLockAsync(DateOnly? date)
+    {
+        var request = new SetPeriodLockRequest { LockedThroughDate = date };
+        if (await RunAsync(async () => _company = await Runner.RunAsync<CompanyService, CompanyDto>(s => s.SetPeriodLockAsync(State.CompanyId, request))))
+        {
+            _lock = _company!.LockedThroughDate;
+            Notice = _lock is { } l ? $"Books locked through {Fmt.Date(l)}." : "Period lock removed.";
+        }
+    }
+}

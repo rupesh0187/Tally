@@ -1,0 +1,140 @@
+@page "/vouchers/{Id:guid}"
+@inherits AppPage
+@inject IJSRuntime JS
+
+<PageTitle>Voucher @(_voucher?.Number) — TallyNext</PageTitle>
+
+<Alerts Error="@Error" Notice="@Notice" />
+
+@if (_voucher is { } v)
+{
+    <div class="page-head">
+        <div>
+            <h1>@v.VoucherTypeName @(v.Number ?? "(draft)")</h1>
+            <div class="muted">
+                @Fmt.Date(v.Date) · FY @v.FinancialYear ·
+                <span class="tag @(v.Status == VoucherStatus.Draft ? "draft" : v.Status == VoucherStatus.Cancelled ? "cancelled" : "")">@v.Status</span>
+                @if (v.ReversalOfVoucherId is { } original)
+                {
+                    <span> · reverses <a href="@($"vouchers/{original}")">@v.ReversalOfNumber</a></span>
+                }
+                @if (v.ReversedByVoucherId is { } reversal)
+                {
+                    <span> · reversed by <a href="@($"vouchers/{reversal}")">@v.ReversedByNumber</a></span>
+                }
+            </div>
+        </div>
+        <div class="toolbar">
+            @if (v.Status == VoucherStatus.Draft && State.Can(Permission.VoucherCreate))
+            {
+                <a class="btn" href="@($"vouchers/{v.Id}/edit")">Edit draft</a>
+                <button class="btn primary" disabled="@Busy" @onclick="PostAsync">Post</button>
+                <button class="btn danger" disabled="@Busy" @onclick="CancelAsync">Cancel draft</button>
+            }
+            @if (v.Status == VoucherStatus.Posted && v.ReversalOfVoucherId is null && v.ReversedByVoucherId is null && State.Can(Permission.VoucherReverse))
+            {
+                <button class="btn" @onclick="() => _reversing = true">Reverse…</button>
+            }
+            <button class="btn" @onclick="PrintAsync">Print</button>
+        </div>
+    </div>
+
+    @if (_reversing)
+    {
+        <div class="card" style="margin-bottom:1rem">
+            <h2 style="margin-top:0">Reverse this voucher</h2>
+            <p class="muted">A posted voucher is never edited. Reversing posts its mirror image on the date you choose, so both remain in the books and in the audit trail.</p>
+            <div class="toolbar">
+                <label class="field">Reversal date <input class="input" type="date" value="@Fmt.Iso(_reverseDate)" @onchange="e => DateOnly.TryParse(e.Value?.ToString(), CultureInfo.InvariantCulture, out _reverseDate)" /></label>
+                <label class="field" style="flex:1">Narration <input class="input" @bind="_reverseNarration" placeholder="Reason for the reversal" /></label>
+                <button class="btn primary" disabled="@Busy" @onclick="ReverseAsync">Post reversal</button>
+                <button class="btn" @onclick="() => _reversing = false">Close</button>
+            </div>
+        </div>
+    }
+
+    <div class="card">
+        <table class="data">
+            <thead><tr><th>Particulars</th><th class="num">Debit</th><th class="num">Credit</th></tr></thead>
+            <tbody>
+                @foreach (var line in v.Lines)
+                {
+                    <tr>
+                        <td><a href="@($"reports/ledger?ledger={line.LedgerId}")">@line.LedgerName</a>@if (!string.IsNullOrEmpty(line.Narration)) { <div class="muted small">@line.Narration</div> }</td>
+                        <td class="num">@(line.Side == DrCr.Debit ? Fmt.Amount(line.Amount) : "")</td>
+                        <td class="num">@(line.Side == DrCr.Credit ? Fmt.Amount(line.Amount) : "")</td>
+                    </tr>
+                }
+                <tr class="total"><td>Total</td><td class="num">@Fmt.AmountOrZero(v.Total)</td><td class="num">@Fmt.AmountOrZero(v.Lines.Where(l => l.Side == DrCr.Credit).Sum(l => l.Amount))</td></tr>
+            </tbody>
+        </table>
+        @if (!string.IsNullOrEmpty(v.Narration))
+        {
+            <p><strong>Narration:</strong> @v.Narration</p>
+        }
+        @if (!string.IsNullOrEmpty(v.Reference))
+        {
+            <p class="muted">Reference: @v.Reference @(v.ReferenceDate is { } rd ? $"dated {Fmt.Date(rd)}" : "")</p>
+        }
+        <p class="muted small">Created @Fmt.Date(v.CreatedAtUtc)@(v.PostedAtUtc is { } p ? $" · posted {Fmt.Date(p)}" : "") · @(v.Version == 0 ? "not yet on the server" : $"server version {v.Version}")</p>
+    </div>
+}
+
+@code {
+    private VoucherDto? _voucher;
+    private bool _reversing;
+    private DateOnly _reverseDate;
+    private string? _reverseNarration;
+
+    [Parameter]
+    public Guid Id { get; set; }
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (State.HasCompany)
+        {
+            await LoadAsync();
+        }
+    }
+
+    private async Task LoadAsync()
+    {
+        await RunAsync(async () =>
+        {
+            _voucher = await Runner.RunAsync<VoucherService, VoucherDto>(s => s.GetAsync(State.CompanyId, Id));
+            _reverseDate = State.Today < _voucher.Date ? _voucher.Date : State.Today;
+        });
+    }
+
+    private async Task PostAsync()
+    {
+        if (await RunAsync(async () => _voucher = await Runner.RunAsync<VoucherService, VoucherDto>(s => s.PostAsync(State.CompanyId, Id))))
+        {
+            Notice = $"Posted as {_voucher!.Number}.";
+        }
+    }
+
+    private async Task CancelAsync()
+    {
+        if (await RunAsync(async () => _voucher = await Runner.RunAsync<VoucherService, VoucherDto>(s => s.CancelDraftAsync(State.CompanyId, Id))))
+        {
+            Notice = "The draft was cancelled.";
+        }
+    }
+
+    private async Task ReverseAsync()
+    {
+        VoucherDto? reversal = null;
+        var request = new ReverseVoucherRequest { Date = _reverseDate, Narration = _reverseNarration, ReversalId = Ids.New() };
+        if (await RunAsync(async () => reversal = await Runner.RunAsync<VoucherService, VoucherDto>(s => s.ReverseAsync(State.CompanyId, Id, request))))
+        {
+            Nav.NavigateTo($"vouchers/{reversal!.Id}");
+        }
+    }
+
+    private async Task PrintAsync()
+    {
+        await using var module = await JS.InvokeAsync<IJSObjectReference>("import", "./_content/TallyNext.UI/tallynext.js");
+        await module.InvokeVoidAsync("print");
+    }
+}

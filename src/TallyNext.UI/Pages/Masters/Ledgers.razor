@@ -1,0 +1,61 @@
+@page "/masters/ledgers"
+@inherits AppPage
+
+<PageTitle>Ledgers — TallyNext</PageTitle>
+
+<div class="page-head">
+    <div><h1>Ledgers</h1><div class="muted">@(_page?.TotalCount ?? 0) ledgers</div></div>
+    <div class="toolbar">
+        <label class="field">Search <input class="input" placeholder="Name or alias" @bind="_search" @bind:event="oninput" @bind:after="ReloadAsync" autofocus /></label>
+        <label class="small"><input type="checkbox" @bind="_cashOnly" @bind:after="ReloadAsync" /> Cash &amp; bank only</label>
+        @if (State.Can(Permission.MasterEdit))
+        {
+            <a class="btn primary" href="masters/ledgers/new">New ledger</a>
+        }
+    </div>
+</div>
+<Alerts Error="@Error" />
+
+<table class="data">
+    <thead><tr><th>Ledger</th><th>Group</th><th>Nature</th><th class="num">Opening balance</th><th>GSTIN</th></tr></thead>
+    <tbody>
+        @foreach (var l in _page?.Items ?? [])
+        {
+            <tr class="clickable" @onclick='() => Nav.NavigateTo($"masters/ledgers/{l.Id}")'>
+                <td>@l.Name @if (!string.IsNullOrEmpty(l.Alias)) { <span class="muted small">(@l.Alias)</span> } @if (l.IsSystem) { <span class="tag">predefined</span> }</td>
+                <td>@l.GroupName</td>
+                <td>@l.Nature</td>
+                <td class="num">@(l.OpeningBalance == 0 ? "" : $"{Fmt.AmountOrZero(l.OpeningBalance)} {l.OpeningSide.ToShortLabel()}")</td>
+                <td class="mono">@l.Gstin</td>
+            </tr>
+        }
+    </tbody>
+</table>
+<Pager Page="@(_page?.Page ?? 1)" TotalPages="@(_page?.TotalPages ?? 0)" TotalCount="@(_page?.TotalCount ?? 0)" PageChanged="GoAsync" />
+
+@code {
+    private PagedResult<LedgerDto>? _page;
+    private string? _search;
+    private bool _cashOnly;
+    private int _pageNumber = 1;
+
+    protected override Task OnInitializedAsync() => State.HasCompany ? LoadAsync() : Task.CompletedTask;
+
+    private Task ReloadAsync()
+    {
+        _pageNumber = 1;
+        return LoadAsync();
+    }
+
+    private Task GoAsync(int page)
+    {
+        _pageNumber = page;
+        return LoadAsync();
+    }
+
+    private Task LoadAsync() => RunAsync(async () =>
+    {
+        var query = new LedgerQuery { Search = _search, CashOrBankOnly = _cashOnly, Page = _pageNumber, PageSize = 100 };
+        _page = await Runner.RunAsync<ChartOfAccountsService, PagedResult<LedgerDto>>(s => s.ListLedgersAsync(State.CompanyId, query));
+    });
+}

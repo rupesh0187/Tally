@@ -1,0 +1,54 @@
+@implements IDisposable
+@inject AppState State
+@inject IHostFeatures Host
+
+<nav class="tn-nav">
+    <div class="tn-nav-section">Company</div>
+    <NavLink href="" Match="NavLinkMatch.All">Dashboard</NavLink>
+    <NavLink href="companies">Select company <kbd>Alt+C</kbd></NavLink>
+    @if (State.HasCompany)
+    {
+        <div class="tn-nav-section">Vouchers</div>
+        <NavLink href="vouchers/new/contra">Contra <kbd>F4</kbd></NavLink>
+        <NavLink href="vouchers/new/payment">Payment <kbd>F5</kbd></NavLink>
+        <NavLink href="vouchers/new/receipt">Receipt <kbd>F6</kbd></NavLink>
+        <NavLink href="vouchers/new/journal">Journal <kbd>F7</kbd></NavLink>
+        <NavLink href="vouchers/new/sales">Sales <kbd>F8</kbd></NavLink>
+        <NavLink href="vouchers/new/purchase">Purchase <kbd>F9</kbd></NavLink>
+        <NavLink href="vouchers/new/credit-note">Credit note <kbd>Alt+F6</kbd></NavLink>
+        <NavLink href="vouchers/new/debit-note">Debit note <kbd>Alt+F5</kbd></NavLink>
+        <NavLink href="vouchers" Match="NavLinkMatch.All">Voucher register <kbd>Alt+V</kbd></NavLink>
+
+        <div class="tn-nav-section">Masters</div>
+        <NavLink href="masters/ledgers">Ledgers <kbd>Alt+L</kbd></NavLink>
+        <NavLink href="masters/groups">Groups</NavLink>
+
+        <div class="tn-nav-section">Reports</div>
+        <NavLink href="reports/day-book">Day Book <kbd>Alt+D</kbd></NavLink>
+        <NavLink href="reports/ledger">Ledger account</NavLink>
+        <NavLink href="reports/cash-bank">Cash &amp; Bank</NavLink>
+        <NavLink href="reports/trial-balance">Trial Balance <kbd>Alt+T</kbd></NavLink>
+        <NavLink href="reports/profit-and-loss">Profit &amp; Loss <kbd>Alt+P</kbd></NavLink>
+        <NavLink href="reports/balance-sheet">Balance Sheet <kbd>Alt+B</kbd></NavLink>
+
+        <div class="tn-nav-section">Administration</div>
+        <NavLink href="sync">@(Host.IsDesktop ? "Synchronization" : "Sync conflicts") <kbd>Alt+S</kbd></NavLink>
+        @if (State.Can(Permission.AuditView))
+        {
+            <NavLink href="audit">Audit trail</NavLink>
+        }
+        <NavLink href="members">Users &amp; roles</NavLink>
+        @if (State.Can(Permission.CompanyManage) || State.Can(Permission.PeriodLock))
+        {
+            <NavLink href="company/settings">Company settings</NavLink>
+        }
+    }
+</nav>
+
+@code {
+    protected override void OnInitialized() => State.Changed += Refresh;
+
+    private void Refresh() => _ = InvokeAsync(StateHasChanged);
+
+    public void Dispose() => State.Changed -= Refresh;
+}

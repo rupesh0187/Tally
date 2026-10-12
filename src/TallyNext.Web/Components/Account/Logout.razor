@@ -1,0 +1,29 @@
+@page "/account/logout"
+@attribute [AllowAnonymous]
+@attribute [ExcludeFromInteractiveRouting]
+@inject SignInManager<TallyNext.Infrastructure.Server.Persistence.AppUser> SignIns
+@inject NavigationManager Navigation
+
+<PageTitle>Sign out — TallyNext</PageTitle>
+
+<div class="signin">
+    <div class="card">
+        <h1>Sign out</h1>
+        <p class="muted">Sign out of TallyNext on this browser?</p>
+        <form method="post" @formname="logout" @onsubmit="SignOutAsync">
+            <AntiforgeryToken />
+            <div class="form-actions">
+                <button class="btn primary" type="submit">Sign out</button>
+                <a class="btn" href="/">Stay signed in</a>
+            </div>
+        </form>
+    </div>
+</div>
+
+@code {
+    private async Task SignOutAsync()
+    {
+        await SignIns.SignOutAsync();
+        Navigation.NavigateTo("account/login", forceLoad: true);
+    }
+}

@@ -1,0 +1,41 @@
+@inject AppState State
+@inject IUseCaseRunner Runner
+@inject AuthenticationStateProvider Authentication
+
+@* Initializes the circuit's session (user name and, when there is only one company, its selection) before the page renders. *@
+@if (_ready)
+{
+    @ChildContent
+}
+
+@code {
+    private bool _ready;
+
+    [Parameter]
+    public RenderFragment? ChildContent { get; set; }
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            if (State.UserName is null)
+            {
+                var user = (await Authentication.GetAuthenticationStateAsync()).User;
+                State.SetUser(user.FindFirst("name")?.Value ?? user.Identity?.Name);
+            }
+
+            if (!State.HasCompany)
+            {
+                var companies = await Runner.RunAsync<TallyNext.Application.Companies.CompanyService, IReadOnlyList<TallyNext.Contracts.Companies.CompanySummaryDto>>(s => s.ListMineAsync());
+                if (companies.Count == 1)
+                {
+                    State.SelectCompany(companies[0]);
+                }
+            }
+        }
+        finally
+        {
+            _ready = true;
+        }
+    }
+}

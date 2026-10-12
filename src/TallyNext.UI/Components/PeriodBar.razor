@@ -1,0 +1,68 @@
+@* Date range selector with quick periods. *@
+<div class="toolbar" role="group" aria-label="Period">
+    <label class="field">From
+        <input class="input" type="date" value="@Fmt.Iso(From)" @onchange="e => SetFrom(e.Value)" />
+    </label>
+    <label class="field">To
+        <input class="input" type="date" value="@Fmt.Iso(To)" @onchange="e => SetTo(e.Value)" />
+    </label>
+    <button class="btn small" @onclick="ThisMonth">This month</button>
+    <button class="btn small" @onclick="YearToDate">Year to date</button>
+    <button class="btn small" @onclick="FullYear">Full year</button>
+    <button class="btn primary" @onclick="Apply">Show</button>
+</div>
+
+@code {
+    [Parameter]
+    public DateOnly From { get; set; }
+
+    [Parameter]
+    public DateOnly To { get; set; }
+
+    [Parameter]
+    public FinancialYear Year { get; set; }
+
+    [Parameter]
+    public EventCallback<(DateOnly From, DateOnly To)> OnChange { get; set; }
+
+    private void SetFrom(object? value)
+    {
+        if (DateOnly.TryParse(value?.ToString(), CultureInfo.InvariantCulture, out var d))
+        {
+            From = d;
+        }
+    }
+
+    private void SetTo(object? value)
+    {
+        if (DateOnly.TryParse(value?.ToString(), CultureInfo.InvariantCulture, out var d))
+        {
+            To = d;
+        }
+    }
+
+    private Task ThisMonth()
+    {
+        var today = DateOnly.FromDateTime(DateTime.Now);
+        From = new DateOnly(today.Year, today.Month, 1);
+        To = From.AddMonths(1).AddDays(-1);
+        return Apply();
+    }
+
+    private Task YearToDate()
+    {
+        From = Year.Start;
+        var today = DateOnly.FromDateTime(DateTime.Now);
+        To = today < Year.End ? today : Year.End;
+        return Apply();
+    }
+
+    private Task FullYear()
+    {
+        From = Year.Start;
+        To = Year.End;
+        return Apply();
+    }
+
+    private Task Apply() => OnChange.InvokeAsync((From, To));
+}

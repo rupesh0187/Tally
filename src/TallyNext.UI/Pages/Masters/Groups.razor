@@ -1,0 +1,130 @@
+@page "/masters/groups"
+@inherits AppPage
+@inject LedgerCache LedgerCache
+
+<PageTitle>Account groups — TallyNext</PageTitle>
+
+<div class="page-head">
+    <div><h1>Account groups</h1><div class="muted">Predefined groups can be renamed; their nature and position are fixed</div></div>
+</div>
+<Alerts Error="@Error" Notice="@Notice" />
+
+@if (State.Can(Permission.MasterEdit))
+{
+    <div class="card" style="margin-bottom:1rem">
+        <h2 style="margin-top:0">@(_editing is null ? "New group" : $"Edit {_editing.Name}")</h2>
+        <div class="form-grid">
+            <label class="field">Name * <input class="input" @bind="_input.Name" maxlength="100" /></label>
+            <label class="field">Under
+                <select class="input" @bind="_parent" disabled="@(_editing?.ParentGroupId is null && _editing is not null)">
+                    <option value="">(primary group)</option>
+                    @foreach (var g in _groups.Where(g => _editing is null || g.Id != _editing.Id))
+                    {
+                        <option value="@g.Id">@(new string('·', g.Depth * 2)) @g.Name</option>
+                    }
+                </select>
+            </label>
+            @if (_parent is null or "" && _editing is null)
+            {
+                <label class="field">Nature
+                    <select class="input" @bind="_input.Nature">
+                        @foreach (var n in Enum.GetValues<AccountNature>())
+                        {
+                            <option value="@n">@n</option>
+                        }
+                    </select>
+                </label>
+                <label class="field"><span><input type="checkbox" @bind="_input.AffectsGrossProfit" /> Affects gross profit (direct income/expense)</span></label>
+            }
+        </div>
+        <div class="form-actions">
+            <button class="btn primary" disabled="@Busy" @onclick="SaveAsync">Save</button>
+            @if (_editing is not null)
+            {
+                <button class="btn" @onclick="Reset">Cancel</button>
+            }
+        </div>
+    </div>
+}
+
+<table class="data">
+    <thead><tr><th>Group</th><th>Nature</th><th class="num">Ledgers</th><th></th></tr></thead>
+    <tbody>
+        @foreach (var g in _groups)
+        {
+            <tr class="@(g.Depth == 0 ? "group" : "")">
+                <td class="indent-@Math.Min(g.Depth, 4)">@g.Name @if (g.IsSystem) { <span class="tag">predefined</span> }</td>
+                <td>@g.Nature@(g.AffectsGrossProfit ? " · direct" : "")</td>
+                <td class="num">@g.LedgerCount</td>
+                <td>
+                    @if (State.Can(Permission.MasterEdit))
+                    {
+                        <button class="btn small" @onclick="() => Edit(g)">Edit</button>
+                        @if (!g.IsSystem && g.LedgerCount == 0)
+                        {
+                            <button class="btn small danger" @onclick="() => DeleteAsync(g)">Delete</button>
+                        }
+                    }
+                </td>
+            </tr>
+        }
+    </tbody>
+</table>
+
+@code {
+    private IReadOnlyList<AccountGroupDto> _groups = [];
+    private AccountGroupInput _input = new() { Nature = AccountNature.Expense };
+    private string? _parent;
+    private AccountGroupDto? _editing;
+
+    protected override Task OnInitializedAsync() => State.HasCompany ? LoadAsync() : Task.CompletedTask;
+
+    private Task LoadAsync() => RunAsync(async () =>
+        _groups = await Runner.RunAsync<ChartOfAccountsService, IReadOnlyList<AccountGroupDto>>(s => s.ListGroupsAsync(State.CompanyId)));
+
+    private void Edit(AccountGroupDto group)
+    {
+        _editing = group;
+        _input = new AccountGroupInput { Name = group.Name, ParentGroupId = group.ParentGroupId, ExpectedVersion = group.Version };
+        _parent = group.ParentGroupId?.ToString();
+    }
+
+    private void Reset()
+    {
+        _editing = null;
+        _input = new AccountGroupInput { Nature = AccountNature.Expense };
+        _parent = null;
+    }
+
+    private async Task SaveAsync()
+    {
+        _input.ParentGroupId = Guid.TryParse(_parent, out var p) ? p : null;
+        var editing = _editing;
+        if (await RunAsync(async () =>
+            {
+                if (editing is null)
+                {
+                    await Runner.RunAsync<ChartOfAccountsService, AccountGroupDto>(s => s.CreateGroupAsync(State.CompanyId, _input));
+                }
+                else
+                {
+                    await Runner.RunAsync<ChartOfAccountsService, AccountGroupDto>(s => s.UpdateGroupAsync(State.CompanyId, editing.Id, _input));
+                }
+            }))
+        {
+            Notice = $"Group '{_input.Name}' saved.";
+            LedgerCache.Invalidate();
+            Reset();
+            await LoadAsync();
+        }
+    }
+
+    private async Task DeleteAsync(AccountGroupDto group)
+    {
+        if (await RunAsync(() => Runner.RunAsync<ChartOfAccountsService>(s => s.DeleteGroupAsync(State.CompanyId, group.Id))))
+        {
+            Notice = $"Group '{group.Name}' deleted.";
+            await LoadAsync();
+        }
+    }
+}

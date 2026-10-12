@@ -1,0 +1,28 @@
+@if (TotalPages > 1)
+{
+    <div class="pager" role="navigation" aria-label="Pages">
+        <button class="btn small" disabled="@(Page <= 1)" @onclick="() => Go(Page - 1)">‹ Previous</button>
+        <span class="muted small">Page @Page of @TotalPages · @TotalCount.ToString("N0", CultureInfo.InvariantCulture) rows</span>
+        <button class="btn small" disabled="@(Page >= TotalPages)" @onclick="() => Go(Page + 1)">Next ›</button>
+    </div>
+}
+else if (TotalCount > 0)
+{
+    <div class="pager"><span class="muted small">@TotalCount.ToString("N0", CultureInfo.InvariantCulture) rows</span></div>
+}
+
+@code {
+    [Parameter]
+    public int Page { get; set; }
+
+    [Parameter]
+    public int TotalPages { get; set; }
+
+    [Parameter]
+    public long TotalCount { get; set; }
+
+    [Parameter]
+    public EventCallback<int> PageChanged { get; set; }
+
+    private Task Go(int page) => PageChanged.InvokeAsync(page);
+}

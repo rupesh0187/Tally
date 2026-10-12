@@ -1,0 +1,96 @@
+@page "/reports/ledger"
+@inherits AppPage
+
+<PageTitle>Ledger account — TallyNext</PageTitle>
+
+<div class="page-head">
+    <div><h1>@(_report?.LedgerName ?? "Ledger account")</h1><div class="muted">@(_report is null ? "Choose a ledger" : $"{_report.GroupName} · {Fmt.Date(_from)} to {Fmt.Date(_to)}")</div></div>
+    <PeriodBar From="_from" To="_to" Year="State.CurrentYear" OnChange="ApplyAsync" />
+</div>
+<div style="max-width:420px; margin-bottom:.75rem">
+    @if (State.HasCompany)
+    {
+        <LedgerPicker Id="ledger-report-picker" CompanyId="State.CompanyId" Value="_ledgerId" ValueChanged="SelectAsync" Label="Ledger" />
+    }
+</div>
+<Alerts Error="@Error" />
+
+@if (_report is { } r)
+{
+    <table class="data">
+        <thead><tr><th>Date</th><th>Particulars</th><th>Type</th><th>No.</th><th class="num">Debit</th><th class="num">Credit</th><th class="num">Balance</th></tr></thead>
+        <tbody>
+            <tr class="group"><td colspan="4">Opening balance</td><td class="num">@Fmt.Amount(r.OpeningDebit)</td><td class="num">@Fmt.Amount(r.OpeningCredit)</td><td class="num">@Fmt.Balance(r.OpeningDebit, r.OpeningCredit)</td></tr>
+            @foreach (var row in r.Rows.Items)
+            {
+                <tr class="clickable" @onclick='() => Nav.NavigateTo($"vouchers/{row.VoucherId}")'>
+                    <td>@Fmt.Date(row.Date)</td>
+                    <td>@row.Particulars @if (!string.IsNullOrEmpty(row.Narration)) { <div class="muted small">@row.Narration</div> }</td>
+                    <td>@row.VoucherTypeName</td>
+                    <td>@row.Number</td>
+                    <td class="num">@Fmt.Amount(row.Debit)</td>
+                    <td class="num">@Fmt.Amount(row.Credit)</td>
+                    <td class="num">@Fmt.Balance(row.BalanceDebit, row.BalanceCredit)</td>
+                </tr>
+            }
+            <tr class="total"><td colspan="4">Transactions in period</td><td class="num">@Fmt.AmountOrZero(r.PeriodDebit)</td><td class="num">@Fmt.AmountOrZero(r.PeriodCredit)</td><td></td></tr>
+            <tr class="total"><td colspan="6">Closing balance</td><td class="num">@Fmt.Balance(r.ClosingDebit, r.ClosingCredit)</td></tr>
+        </tbody>
+    </table>
+    <Pager Page="r.Rows.Page" TotalPages="r.Rows.TotalPages" TotalCount="r.Rows.TotalCount" PageChanged="GoAsync" />
+}
+
+@code {
+    private Guid? _ledgerId;
+    private DateOnly _from;
+    private DateOnly _to;
+    private int _page = 1;
+    private LedgerReport? _report;
+
+    [SupplyParameterFromQuery(Name = "ledger")]
+    public Guid? LedgerQuery { get; set; }
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (!State.HasCompany)
+        {
+            return;
+        }
+
+        _from = State.PeriodStart;
+        _to = State.Today < State.CurrentYear.End ? State.Today : State.CurrentYear.End;
+        if (_to < _from)
+        {
+            _to = _from;
+        }
+
+        if (LedgerQuery is { } id)
+        {
+            _ledgerId = id;
+            await LoadAsync();
+        }
+    }
+
+    private Task SelectAsync(Guid? id)
+    {
+        _ledgerId = id;
+        _page = 1;
+        return id is null ? Task.CompletedTask : LoadAsync();
+    }
+
+    private Task ApplyAsync((DateOnly From, DateOnly To) range)
+    {
+        (_from, _to, _page) = (range.From, range.To, 1);
+        return LoadAsync();
+    }
+
+    private Task GoAsync(int page)
+    {
+        _page = page;
+        return LoadAsync();
+    }
+
+    private Task LoadAsync() => _ledgerId is not { } id
+        ? Task.CompletedTask
+        : RunAsync(async () => _report = await Runner.RunAsync<ReportService, LedgerReport>(s => s.LedgerAsync(State.CompanyId, id, _from, _to, _page, 100)));
+}

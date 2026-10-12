@@ -1,0 +1,101 @@
+@page "/vouchers"
+@inherits AppPage
+
+<PageTitle>Voucher register — TallyNext</PageTitle>
+
+<div class="page-head">
+    <div><h1>Voucher register</h1><div class="muted">All vouchers including drafts, newest first</div></div>
+    <div class="toolbar">
+        <label class="field">Type
+            <select class="input" @bind="_typeId" @bind:after="ReloadAsync">
+                <option value="">All types</option>
+                @foreach (var t in _types)
+                {
+                    <option value="@t.Id">@t.Name</option>
+                }
+            </select>
+        </label>
+        <label class="field">Status
+            <select class="input" @bind="_status" @bind:after="ReloadAsync">
+                <option value="">Any</option>
+                <option value="Draft">Draft</option>
+                <option value="Posted">Posted</option>
+                <option value="Cancelled">Cancelled</option>
+            </select>
+        </label>
+        <label class="field">Search
+            <input class="input" placeholder="Number, reference, narration" @bind="_search" @bind:event="oninput" @bind:after="ReloadAsync" />
+        </label>
+    </div>
+</div>
+
+<Alerts Error="@Error" />
+
+<table class="data">
+    <thead><tr><th>Date</th><th>No.</th><th>Type</th><th>Particulars</th><th>Narration</th><th class="num">Amount</th><th>Status</th></tr></thead>
+    <tbody>
+        @foreach (var v in _page?.Items ?? [])
+        {
+            <tr class="clickable" @onclick='() => Nav.NavigateTo($"vouchers/{v.Id}")'>
+                <td>@Fmt.Date(v.Date)</td>
+                <td>@(v.Number ?? "—")</td>
+                <td>@v.VoucherTypeName @if (v.IsReversal) { <span class="tag">reversal</span> }</td>
+                <td>@v.Particulars</td>
+                <td class="muted">@v.Narration</td>
+                <td class="num">@Fmt.AmountOrZero(v.Total)</td>
+                <td><span class="tag @(v.Status == VoucherStatus.Draft ? "draft" : v.Status == VoucherStatus.Cancelled ? "cancelled" : "")">@v.Status</span>
+                    @if (v.Version == 0) { <span class="tag draft" title="Saved on this computer; not yet accepted by the server">not uploaded</span> }</td>
+            </tr>
+        }
+        @if (_page is { TotalCount: 0 })
+        {
+            <tr><td colspan="7" class="muted">No vouchers yet. Press <kbd>F5</kbd> for a payment or <kbd>F7</kbd> for a journal.</td></tr>
+        }
+    </tbody>
+</table>
+<Pager Page="@(_page?.Page ?? 1)" TotalPages="@(_page?.TotalPages ?? 0)" TotalCount="@(_page?.TotalCount ?? 0)" PageChanged="GoAsync" />
+
+@code {
+    private IReadOnlyList<VoucherTypeDto> _types = [];
+    private PagedResult<VoucherListItem>? _page;
+    private string? _typeId;
+    private string? _status;
+    private string? _search;
+    private int _pageNumber = 1;
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (!State.HasCompany)
+        {
+            return;
+        }
+
+        await RunAsync(async () => _types = await Runner.RunAsync<VoucherService, IReadOnlyList<VoucherTypeDto>>(s => s.ListTypesAsync(State.CompanyId)));
+        await LoadAsync();
+    }
+
+    private Task ReloadAsync()
+    {
+        _pageNumber = 1;
+        return LoadAsync();
+    }
+
+    private Task GoAsync(int page)
+    {
+        _pageNumber = page;
+        return LoadAsync();
+    }
+
+    private Task LoadAsync() => RunAsync(async () =>
+    {
+        var query = new VoucherQuery
+        {
+            VoucherTypeId = Guid.TryParse(_typeId, out var t) ? t : null,
+            Status = Enum.TryParse<VoucherStatus>(_status, out var s) ? s : null,
+            Search = _search,
+            Page = _pageNumber,
+            PageSize = 50,
+        };
+        _page = await Runner.RunAsync<VoucherService, PagedResult<VoucherListItem>>(svc => svc.ListAsync(State.CompanyId, query));
+    });
+}

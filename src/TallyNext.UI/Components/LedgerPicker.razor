@@ -1,0 +1,168 @@
+@inject LedgerCache Ledgers
+
+@* Type-to-search ledger selector: Up/Down to move, Enter to pick, Esc to close. *@
+<div class="picker" aria-expanded="@(_open ? "true" : "false")">
+    <input id="@Id"
+           class="input @(Invalid ? "invalid" : "")"
+           value="@_text"
+           placeholder="@Placeholder"
+           autocomplete="off"
+           role="combobox"
+           aria-autocomplete="list"
+           aria-label="@Label"
+           aria-controls="@($"{Id}-list")"
+           aria-activedescendant="@(_open && _results.Count > 0 ? $"{Id}-opt-{_highlight}" : null)"
+           data-next="@NextId"
+           @oninput="OnInput"
+           @onkeydown="OnKeyDown"
+           @onfocus="OnFocus"
+           @onblur="OnBlur" />
+    @if (_open && _results.Count > 0)
+    {
+        <ul id="@($"{Id}-list")" class="picker-list" role="listbox">
+            @for (var i = 0; i < _results.Count; i++)
+            {
+                var index = i;
+                var item = _results[i];
+                <li id="@($"{Id}-opt-{index}")" role="option" aria-selected="@(index == _highlight ? "true" : "false")"
+                    class="@(index == _highlight ? "active" : "")"
+                    @onmousedown="() => SelectAsync(item, commit: true)" @onmousedown:preventDefault>
+                    <span>@item.Name @if (!string.IsNullOrEmpty(item.Alias)) { <span class="muted small">(@item.Alias)</span> }</span>
+                    <span class="muted small">@item.GroupName</span>
+                </li>
+            }
+        </ul>
+    }
+</div>
+
+@code {
+    private IReadOnlyList<LedgerLookupItem> _all = [];
+    private List<LedgerLookupItem> _results = [];
+    private string _text = string.Empty;
+    private bool _open;
+    private int _highlight;
+    private Guid? _shownId;
+
+    [Parameter, EditorRequired]
+    public string Id { get; set; } = string.Empty;
+
+    [Parameter, EditorRequired]
+    public Guid CompanyId { get; set; }
+
+    [Parameter]
+    public Guid? Value { get; set; }
+
+    [Parameter]
+    public EventCallback<Guid?> ValueChanged { get; set; }
+
+    /// <summary>
+    /// Raised after a ledger is picked with a click, or with Enter when no <see cref="NextId"/> is set (with
+    /// <see cref="NextId"/>, focus moves client-side on Enter without a server round trip).
+    /// </summary>
+    [Parameter]
+    public EventCallback OnCommitted { get; set; }
+
+    /// <summary>Id of the element that receives focus when Enter is pressed (client-side, instant).</summary>
+    [Parameter]
+    public string? NextId { get; set; }
+
+    [Parameter]
+    public Func<LedgerLookupItem, bool>? Filter { get; set; }
+
+    [Parameter]
+    public string Label { get; set; } = "Ledger";
+
+    [Parameter]
+    public string Placeholder { get; set; } = "Type to search ledgers…";
+
+    [Parameter]
+    public bool Invalid { get; set; }
+
+    protected override async Task OnParametersSetAsync()
+    {
+        _all = await Ledgers.GetAsync(CompanyId);
+        if (Value != _shownId)
+        {
+            _shownId = Value;
+            _text = Value is { } id ? _all.FirstOrDefault(l => l.Id == id)?.Name ?? string.Empty : string.Empty;
+        }
+    }
+
+    private void OnFocus()
+    {
+        _results = LedgerCache.Search(_all, Value is null ? _text : null, Filter).ToList();
+        _highlight = 0;
+    }
+
+    private async Task OnInput(ChangeEventArgs e)
+    {
+        _text = e.Value?.ToString() ?? string.Empty;
+        _results = LedgerCache.Search(_all, _text, Filter).ToList();
+        _highlight = 0;
+        _open = true;
+        if (Value is not null)
+        {
+            _shownId = null;
+            await ValueChanged.InvokeAsync(null);
+        }
+    }
+
+    private async Task OnKeyDown(KeyboardEventArgs e)
+    {
+        switch (e.Key)
+        {
+            case "ArrowDown":
+                _open = true;
+                if (_results.Count == 0)
+                {
+                    _results = LedgerCache.Search(_all, _text, Filter).ToList();
+                }
+
+                _highlight = Math.Min(_highlight + 1, Math.Max(_results.Count - 1, 0));
+                break;
+            case "ArrowUp":
+                _highlight = Math.Max(_highlight - 1, 0);
+                break;
+            case "Enter":
+                if (_open && _results.Count > 0)
+                {
+                    await SelectAsync(_results[_highlight], commit: NextId is null);
+                }
+                else if (Value is not null && NextId is null)
+                {
+                    await OnCommitted.InvokeAsync();
+                }
+
+                break;
+            case "Escape":
+                _open = false;
+                break;
+        }
+    }
+
+    private void OnBlur()
+    {
+        _open = false;
+        if (Value is null && !string.IsNullOrWhiteSpace(_text))
+        {
+            // Accept an exact (case-insensitive) name typed in full.
+            var exact = _all.FirstOrDefault(l => string.Equals(l.Name, _text.Trim(), StringComparison.OrdinalIgnoreCase));
+            if (exact is not null)
+            {
+                _ = SelectAsync(exact, commit: false);
+            }
+        }
+    }
+
+    private async Task SelectAsync(LedgerLookupItem item, bool commit)
+    {
+        _text = item.Name;
+        _shownId = item.Id;
+        _open = false;
+        await ValueChanged.InvokeAsync(item.Id);
+        if (commit)
+        {
+            await OnCommitted.InvokeAsync();
+        }
+    }
+}

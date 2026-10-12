@@ -1,0 +1,56 @@
+@page "/reports/balance-sheet"
+@inherits AppPage
+
+<PageTitle>Balance Sheet — TallyNext</PageTitle>
+
+<div class="page-head">
+    <div><h1>Balance Sheet</h1><div class="muted">As at @Fmt.Date(_asAt)</div></div>
+    <div class="toolbar">
+        <label class="field">As at <input class="input" type="date" value="@Fmt.Iso(_asAt)" @onchange="SetDate" /></label>
+        <button class="btn primary" @onclick="LoadAsync">Show</button>
+    </div>
+</div>
+<Alerts Error="@Error" />
+
+@if (_report is { } r)
+{
+    @if (r.TotalAssets != r.TotalLiabilities)
+    {
+        <div class="alert error">Assets and liabilities do not agree. This indicates a data problem.</div>
+    }
+    <div class="statement">
+        <StatementTable Title="Liabilities" Section="r.Liabilities" />
+        <StatementTable Title="Assets" Section="r.Assets" />
+    </div>
+    <p class="muted small">
+        Profit &amp; Loss A/c includes the profit of the current period (@Fmt.AmountOrZero(r.CurrentPeriodProfit)) and earlier periods.
+        Income and expense balances appear only through it, never twice.
+    </p>
+}
+
+@code {
+    private DateOnly _asAt;
+    private BalanceSheetReport? _report;
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (!State.HasCompany)
+        {
+            return;
+        }
+
+        _asAt = State.Today < State.PeriodStart ? State.PeriodStart : State.Today;
+        await LoadAsync();
+    }
+
+    private void SetDate(ChangeEventArgs e)
+    {
+        if (DateOnly.TryParse(e.Value?.ToString(), CultureInfo.InvariantCulture, out var d))
+        {
+            _asAt = d;
+        }
+    }
+
+    private Task LoadAsync() => RunAsync(async () =>
+        _report = await Runner.RunAsync<ReportService, BalanceSheetReport>(s => s.BalanceSheetAsync(State.CompanyId, _asAt)));
+}

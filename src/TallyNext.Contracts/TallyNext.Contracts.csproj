@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!--
+    Wire contracts shared by API, Web, Desktop and the sync protocol.
+    References TallyNext.Domain only for its enums (DrCr, VoucherStatus, CompanyRole, ...) so that
+    the wire vocabulary can never drift from the domain vocabulary. No other dependencies.
+  -->
+  <PropertyGroup>
+    <TargetFramework>$(TallyNextTargetFramework)</TargetFramework>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\TallyNext.Domain\TallyNext.Domain.csproj" />
+  </ItemGroup>
+</Project>
