@@ -20,7 +20,14 @@ public enum VoucherStatus : byte
 public sealed record VoucherHeader(string? Narration = null, string? Reference = null, DateOnly? ReferenceDate = null);
 
 /// <param name="Id">Optional line id; replicated vouchers keep the ids assigned where they were created.</param>
-public readonly record struct VoucherLineSpec(Guid LedgerId, DrCr Side, Money Amount, string? Narration = null, Guid? Id = null);
+/// <param name="Bills">Bill-wise breakup of the line (bill-wise ledgers only); null or empty when not allocated.</param>
+public readonly record struct VoucherLineSpec(
+    Guid LedgerId,
+    DrCr Side,
+    Money Amount,
+    string? Narration = null,
+    Guid? Id = null,
+    IReadOnlyList<BillAllocationSpec>? Bills = null);
 
 /// <summary>
 /// A double-entry voucher (aggregate root). Invariants enforced here:
@@ -39,6 +46,7 @@ public sealed class Voucher : CompanyScopedEntity
 
     private readonly List<VoucherLine> _lines = [];
     private readonly List<VoucherItemLine> _itemLines = [];
+    private readonly List<VoucherBillAllocation> _billAllocations = [];
 
     private Voucher()
     {
@@ -88,6 +96,9 @@ public sealed class Voucher : CompanyScopedEntity
 
     /// <summary>Invoice item/service lines (empty for plain accounting vouchers).</summary>
     public IReadOnlyList<VoucherItemLine> ItemLines => _itemLines;
+
+    /// <summary>Bill-wise breakup of the lines posted to bill-wise ledgers.</summary>
+    public IReadOnlyList<VoucherBillAllocation> BillAllocations => _billAllocations;
 
     /// <summary>Customer or supplier of an invoice; null for plain accounting vouchers.</summary>
     public Guid? PartyLedgerId { get; private set; }
@@ -198,7 +209,12 @@ public sealed class Voucher : CompanyScopedEntity
             new VoucherHeader(narration ?? $"Reversal of {original.Number}", original.Reference, original.ReferenceDate));
         reversal.SetLines(original.Lines
             .OrderBy(l => l.LineNo)
-            .Select(l => new VoucherLineSpec(l.LedgerId, l.Side.Opposite(), l.Amount, l.Narration))
+            .Select(l => new VoucherLineSpec(
+                l.LedgerId,
+                l.Side.Opposite(),
+                l.Amount,
+                l.Narration,
+                Bills: original.BillAllocations.Where(a => a.LineNo == l.LineNo).OrderBy(a => a.AllocationNo).Select(a => a.ToReversedSpec()).ToList()))
             .ToList());
         if (original.IsInvoice)
         {
@@ -291,6 +307,12 @@ public sealed class Voucher : CompanyScopedEntity
         {
             item.MarkPosted();
         }
+
+        foreach (var allocation in _billAllocations)
+        {
+            allocation.NameAfterVoucher(number.Display);
+            allocation.MarkPosted();
+        }
     }
 
     public void CancelDraft()
@@ -351,6 +373,11 @@ public sealed class Voucher : CompanyScopedEntity
         {
             item.SetVoucherDate(date);
         }
+
+        foreach (var allocation in _billAllocations)
+        {
+            allocation.SetVoucherDate(date);
+        }
     }
 
     private void SetLines(IReadOnlyCollection<VoucherLineSpec> lines)
@@ -367,6 +394,7 @@ public sealed class Voucher : CompanyScopedEntity
         }
 
         var newLines = new List<VoucherLine>(lines.Count);
+        var newAllocations = new List<VoucherBillAllocation>();
         var lineNo = 0;
         long debit = 0;
         foreach (var spec in lines)
@@ -392,11 +420,20 @@ public sealed class Voucher : CompanyScopedEntity
                 debit = checked(debit + spec.Amount.Minor);
             }
 
-            newLines.Add(VoucherLine.Create(this, lineNo, spec));
+            var line = VoucherLine.Create(this, lineNo, spec);
+            newLines.Add(line);
+            if (spec.Bills is { Count: > 0 } bills)
+            {
+                VoucherBillAllocation.Validate(lineNo, spec.Amount, bills);
+                var allocationNo = 0;
+                newAllocations.AddRange(bills.Select(b => VoucherBillAllocation.Create(this, line, ++allocationNo, b)));
+            }
         }
 
         _lines.Clear();
         _lines.AddRange(newLines);
+        _billAllocations.Clear();
+        _billAllocations.AddRange(newAllocations);
         TotalMinor = debit;
     }
 

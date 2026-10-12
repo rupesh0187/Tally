@@ -56,7 +56,24 @@ public sealed record LedgerDto(
     int? CreditPeriodDays,
     GstTaxType GstTaxType,
     IReadOnlyList<GstRateEntry> GstRates,
-    long Version);
+    long Version,
+    IReadOnlyList<OpeningBillDto>? OpeningBills = null);
+
+public sealed record OpeningBillDto(string Name, DateOnly Date, DateOnly? DueDate, decimal Amount, DrCr Side);
+
+/// <summary>Editable opening bill of a bill-wise ledger.</summary>
+public sealed class OpeningBillInput
+{
+    public string Name { get; set; } = string.Empty;
+
+    public DateOnly Date { get; set; }
+
+    public DateOnly? DueDate { get; set; }
+
+    public decimal Amount { get; set; }
+
+    public DrCr Side { get; set; } = DrCr.Debit;
+}
 
 /// <summary>Editable GST rate entry (percentages, e.g. 18 or 0.25).</summary>
 public sealed class GstRateInput
@@ -96,7 +113,9 @@ public sealed record LedgerLookupItem(
     Guid GroupId,
     string GroupName,
     AccountNature Nature,
-    LedgerTraits Traits);
+    LedgerTraits Traits,
+    bool IsBillWise = false,
+    int? CreditPeriodDays = null);
 
 public sealed class LedgerInput
 {
@@ -137,6 +156,9 @@ public sealed class LedgerInput
     public GstTaxType GstTaxType { get; set; }
 
     public List<GstRateInput> GstRates { get; set; } = [];
+
+    /// <summary>Bill-wise breakup of the opening balance (bill-wise ledgers); the rest is on account.</summary>
+    public List<OpeningBillInput> OpeningBills { get; set; } = [];
 
     /// <summary>Optional client-generated id for idempotent creates.</summary>
     public Guid? Id { get; set; }

@@ -125,6 +125,13 @@ table.data td.indent-1 { padding-left: 1.6rem; } table.data td.indent-2 { paddin
 .totals .diff { color: var(--tn-bad); font-weight: 600; }
 .totals .balanced { color: var(--tn-ok); font-weight: 600; }
 
+/* ---------- bill-wise ---------- */
+.line-bills { padding: .3rem 0 .5rem 72px; border-bottom: 1px dashed var(--tn-border); display: flex; gap: .5rem; align-items: center; flex-wrap: wrap; }
+.bills { flex: 1; }
+.bill-row { display: grid; grid-template-columns: 130px minmax(140px, 1fr) 150px 140px 34px; gap: .4rem; margin-bottom: .3rem; }
+.bills .diff { color: var(--tn-bad); font-weight: 600; }
+td.overdue { color: var(--tn-bad); font-weight: 600; }
+
 /* ---------- item invoice ---------- */
 .voucher.invoice { max-width: 1320px; container-type: inline-size; }
 .invoice-head { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: .75rem; align-items: end; }

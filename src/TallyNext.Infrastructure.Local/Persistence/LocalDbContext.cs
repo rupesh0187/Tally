@@ -47,6 +47,8 @@ public sealed class LocalDbContext : DbContext, IAccountingDbContext
 
     public DbSet<VoucherItemLine> VoucherItemLines => Set<VoucherItemLine>();
 
+    public DbSet<VoucherBillAllocation> VoucherBillAllocations => Set<VoucherBillAllocation>();
+
     public DbSet<UnitOfMeasure> Units => Set<UnitOfMeasure>();
 
     public DbSet<Godown> Godowns => Set<Godown>();

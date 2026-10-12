@@ -119,6 +119,15 @@ years into the Profit & Loss ledger's opening; the P&L trading account adds clos
 stock; the balance sheet adds closing stock under Stock-in-Hand. Stock at books beginning is part of the opening
 balances. These adjustments keep every statement balanced (asserted by tests on both providers).
 
+### Bill-wise
+
+Lines posted to bill-wise ledgers carry a breakup (`VoucherBillAllocation`: New Ref, Agst Ref, Advance, On Account)
+validated by the voucher aggregate (positive parts adding up to the line, names where required). Defaults and the
+"settlement must name an existing bill" rule live in `BillAllocationRules`, applied to user input only.
+`BillWiseService` computes pending bills by grouping opening bills and posted allocations by (ledger, normalized
+name) and derives the on-account amount as ledger balance minus pending bills, so per-party totals always equal the
+ledger balances.
+
 ### Invoices
 
 `InvoiceService` turns an invoice request (party, place of supply, item/service lines) into a voucher:

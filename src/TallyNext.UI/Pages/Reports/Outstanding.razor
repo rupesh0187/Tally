@@ -1,0 +1,127 @@
+@page "/reports/outstanding"
+@page "/reports/outstanding/{KindSlug}"
+@inherits AppPage
+
+<PageTitle>@Title — TallyNext</PageTitle>
+
+<div class="page-head">
+    <div><h1>@Title</h1><div class="muted">Bill-wise outstanding as at @Fmt.Date(_asAt)</div></div>
+    <div class="toolbar">
+        <a class="btn @(_kind == OutstandingKind.Receivables ? "primary" : "")" href="reports/outstanding/receivables">Receivables</a>
+        <a class="btn @(_kind == OutstandingKind.Payables ? "primary" : "")" href="reports/outstanding/payables">Payables</a>
+        <label class="field">As at <input class="input" type="date" value="@Fmt.Iso(_asAt)" @onchange="SetAsAtAsync" /></label>
+        <label class="field" style="min-width:16rem">Party
+            <LedgerPicker Id="o-party" CompanyId="State.CompanyId" Value="_ledgerId" ValueChanged="SetLedgerAsync" Filter="IsBillWise" Placeholder="All bill-wise parties" Label="Party" />
+        </label>
+        @if (_ledgerId is not null)
+        {
+            <button class="btn small" @onclick="() => SetLedgerAsync(null)">All parties</button>
+        }
+    </div>
+</div>
+<Alerts Error="@Error" />
+
+@if (_report is { } r)
+{
+    <div class="grid cols-4" style="margin-bottom:1rem">
+        <div class="card stat"><div class="label">Pending bills</div><div class="value">@Fmt.AmountOrZero(r.TotalBillsPending)</div></div>
+        <div class="card stat"><div class="label">On account</div><div class="value">@Fmt.AmountOrZero(r.TotalOnAccount)</div></div>
+        <div class="card stat"><div class="label">Total @(r.Kind == OutstandingKind.Receivables ? "receivable" : "payable")</div><div class="value">@Fmt.AmountOrZero(r.Total)</div></div>
+        <div class="card stat"><div class="label">Overdue bills</div><div class="value">@Fmt.AmountOrZero(r.Bills.Where(b => b.OverdueDays > 0 && b.Pending > 0).Sum(b => b.Pending))</div></div>
+    </div>
+
+    <table class="data" style="margin-bottom:1rem">
+        <thead><tr>@foreach (var a in r.Ageing) { <th class="num">@a.Label</th> }</tr></thead>
+        <tbody><tr>@foreach (var a in r.Ageing) { <td class="num">@Fmt.AmountOrZero(a.Amount)</td> }</tr></tbody>
+    </table>
+
+    <table class="data">
+        <thead>
+            <tr><th>Party / bill</th><th>Bill date</th><th>Due date</th><th class="num">Overdue (days)</th><th class="num">Bill amount</th><th class="num">Pending</th></tr>
+        </thead>
+        <tbody>
+            @foreach (var ledger in r.Ledgers)
+            {
+                <tr class="group clickable" @onclick='() => Nav.NavigateTo($"reports/ledger?ledger={ledger.LedgerId}")'>
+                    <td>@ledger.LedgerName <span class="muted small">@ledger.GroupName</span></td>
+                    <td></td><td></td><td></td><td></td>
+                    <td class="num">@Fmt.AmountOrZero(ledger.Balance)</td>
+                </tr>
+                @foreach (var bill in r.Bills.Where(b => b.LedgerId == ledger.LedgerId))
+                {
+                    <tr>
+                        <td class="indent-1">@bill.BillName @if (bill.IsAdvance) { <span class="tag">advance</span> } @if (bill.Original == bill.Pending && bill.Pending < 0 && !bill.IsAdvance) { <span class="tag draft">unmatched</span> }</td>
+                        <td>@Fmt.Date(bill.BillDate)</td>
+                        <td>@(bill.DueDate is { } due ? Fmt.Date(due) : "")</td>
+                        <td class="num @(bill.OverdueDays > 0 && bill.Pending > 0 ? "overdue" : "")">@(bill.OverdueDays > 0 && bill.Pending > 0 ? bill.OverdueDays.ToString(CultureInfo.InvariantCulture) : "")</td>
+                        <td class="num">@Fmt.AmountOrZero(bill.Original)</td>
+                        <td class="num">@Fmt.AmountOrZero(bill.Pending)</td>
+                    </tr>
+                }
+                @if (ledger.OnAccount != 0)
+                {
+                    <tr><td class="indent-1 muted">On account</td><td></td><td></td><td></td><td></td><td class="num">@Fmt.AmountOrZero(ledger.OnAccount)</td></tr>
+                }
+            }
+            @if (r.Ledgers.Count == 0)
+            {
+                <tr><td colspan="6" class="muted">Nothing outstanding. Only ledgers marked "maintain bill-wise details" appear here.</td></tr>
+            }
+        </tbody>
+        <tfoot>
+            <tr class="total"><td>Total</td><td></td><td></td><td></td><td></td><td class="num">@Fmt.AmountOrZero(r.Total)</td></tr>
+        </tfoot>
+    </table>
+    <p class="muted small">
+        Positive amounts are @(r.Kind == OutstandingKind.Receivables ? "due to the company" : "owed by the company"); negative amounts are advances or over-settlements.
+        "Unmatched" marks settlements of a bill reference that has no bill (for example one entered offline elsewhere) — correct them with a journal.
+    </p>
+}
+
+@code {
+    private OutstandingKind _kind = OutstandingKind.Receivables;
+    private DateOnly _asAt;
+    private Guid? _ledgerId;
+    private OutstandingReport? _report;
+
+    [Parameter]
+    public string? KindSlug { get; set; }
+
+    private string Title => _kind == OutstandingKind.Receivables ? "Receivables" : "Payables";
+
+    private static bool IsBillWise(LedgerLookupItem l) => l.IsBillWise;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (!State.HasCompany)
+        {
+            return;
+        }
+
+        _kind = string.Equals(KindSlug, "payables", StringComparison.OrdinalIgnoreCase) ? OutstandingKind.Payables : OutstandingKind.Receivables;
+        if (_asAt == default)
+        {
+            _asAt = State.Today;
+        }
+
+        await LoadAsync();
+    }
+
+    private async Task SetAsAtAsync(ChangeEventArgs e)
+    {
+        if (DateOnly.TryParse(e.Value?.ToString(), CultureInfo.InvariantCulture, out var d))
+        {
+            _asAt = d;
+            await LoadAsync();
+        }
+    }
+
+    private async Task SetLedgerAsync(Guid? id)
+    {
+        _ledgerId = id;
+        await LoadAsync();
+    }
+
+    private Task LoadAsync() => RunAsync(async () =>
+        _report = await Runner.RunAsync<BillWiseService, OutstandingReport>(s => s.OutstandingAsync(State.CompanyId, _kind, _asAt, _ledgerId)));
+}

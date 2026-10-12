@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using TallyNext.Application.Abstractions;
+using TallyNext.Application.Bills;
 using TallyNext.Application.Common;
 using TallyNext.Application.Security;
 using TallyNext.Application.Sync;
@@ -54,6 +55,7 @@ public sealed class VoucherService(
         var company = await LoadCompanyAsync(companyId, cancellationToken);
         var type = await db.VoucherTypes.SingleOrDefaultAsync(t => t.CompanyId == companyId && t.Id == input.VoucherTypeId && !t.IsDeleted, cancellationToken)
             ?? throw new NotFoundException("voucher_type");
+        lines = await WithBillsAsync(companyId, type.BaseType, input, lines, cancellationToken);
 
         var voucher = Voucher.CreateDraft(
             input.Id ?? Ids.New(),
@@ -66,6 +68,7 @@ public sealed class VoucherService(
             context.DeviceId,
             idempotencyKey);
 
+        await BillAllocationRules.EnsureReferencesExistAsync(db, voucher, cancellationToken);
         await rules.ValidateAsync(voucher, forPosting: input.Post, cancellationToken);
         if (input.Post)
         {
@@ -112,7 +115,9 @@ public sealed class VoucherService(
         }
 
         var before = SnapshotMapper.ToSnapshot(voucher);
+        lines = await WithBillsAsync(companyId, voucher.BaseType, input, lines, cancellationToken);
         voucher.UpdateDraft(company, input.Date, new VoucherHeader(input.Narration, input.Reference, input.ReferenceDate), lines);
+        await BillAllocationRules.EnsureReferencesExistAsync(db, voucher, cancellationToken);
         await rules.ValidateAsync(voucher, forPosting: input.Post, cancellationToken);
         if (input.Post)
         {
@@ -200,6 +205,7 @@ public sealed class VoucherService(
         var voucher = await db.Vouchers.AsNoTracking()
             .Include(v => v.Lines)
             .Include(v => v.ItemLines)
+            .Include(v => v.BillAllocations)
             .SingleOrDefaultAsync(v => v.CompanyId == companyId && v.Id == voucherId && !v.IsDeleted, cancellationToken)
             ?? throw new NotFoundException("voucher");
 
@@ -240,7 +246,9 @@ public sealed class VoucherService(
             reversedBy?.Number,
             Amounts.ToDecimal(voucher.TotalMinor),
             voucher.Lines.OrderBy(l => l.LineNo)
-                .Select(l => new VoucherLineDto(l.Id, l.LineNo, l.LedgerId, ledgerNames.GetValueOrDefault(l.LedgerId, "(unknown ledger)"), l.Side, Amounts.ToDecimal(l.AmountMinor), l.Narration))
+                .Select(l => new VoucherLineDto(
+                    l.Id, l.LineNo, l.LedgerId, ledgerNames.GetValueOrDefault(l.LedgerId, "(unknown ledger)"), l.Side, Amounts.ToDecimal(l.AmountMinor), l.Narration,
+                    BillsOf(voucher, l.LineNo)))
                 .ToList(),
             voucher.CreatedByUserId,
             voucher.CreatedOnDeviceId,
@@ -392,7 +400,8 @@ public sealed class VoucherService(
         ?? throw new NotFoundException("company");
 
     private async Task<Voucher> LoadVoucherAsync(Guid companyId, Guid voucherId, CancellationToken cancellationToken) =>
-        await db.Vouchers.Include(v => v.Lines).Include(v => v.ItemLines).SingleOrDefaultAsync(v => v.CompanyId == companyId && v.Id == voucherId && !v.IsDeleted, cancellationToken)
+        await db.Vouchers.Include(v => v.Lines).Include(v => v.ItemLines).Include(v => v.BillAllocations)
+            .SingleOrDefaultAsync(v => v.CompanyId == companyId && v.Id == voucherId && !v.IsDeleted, cancellationToken)
         ?? throw new NotFoundException("voucher");
 
     private static List<VoucherLineSpec> ParseLines(IReadOnlyList<VoucherLineInput>? lines)
@@ -404,6 +413,21 @@ public sealed class VoucherService(
 
         return lines.Select((l, i) => new VoucherLineSpec(l.LedgerId, l.Side, Amounts.Parse(l.Amount, $"Lines[{i}].Amount"), l.Narration)).ToList();
     }
+
+    /// <summary>Bill-wise breakup of one line for display; null when the line has none.</summary>
+    internal static IReadOnlyList<BillAllocationDto>? BillsOf(Voucher voucher, int lineNo)
+    {
+        var bills = voucher.BillAllocations.Where(a => a.LineNo == lineNo).OrderBy(a => a.AllocationNo).ToList();
+        return bills.Count == 0
+            ? null
+            : bills.Select(a => new BillAllocationDto(a.Id, a.Kind, a.BillName, a.DueDate, Amounts.ToDecimal(a.AmountMinor))).ToList();
+    }
+
+    private Task<List<VoucherLineSpec>> WithBillsAsync(Guid companyId, VoucherBaseType type, VoucherInput input, List<VoucherLineSpec> lines, CancellationToken cancellationToken) =>
+        BillAllocationRules.ApplyAsync(
+            db, companyId, type, input.Date, lines, input.Lines.Select(l => (IReadOnlyList<BillAllocationInput>?)l.Bills).ToList(),
+            type == VoucherBaseType.Purchase ? input.Reference : null,
+            cancellationToken);
 
     private static string Describe(VoucherType type, Voucher voucher) =>
         $"{type.Name} {voucher.Number ?? "(draft)"} dated {voucher.Date:yyyy-MM-dd} for {Amounts.ToDecimal(voucher.TotalMinor):0.00}";

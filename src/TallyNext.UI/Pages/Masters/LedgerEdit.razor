@@ -44,6 +44,38 @@
             <label class="field">Credit period (days) <input class="input" type="number" min="0" max="3650" @bind="_input.CreditPeriodDays" /></label>
         </div>
 
+        @if (_input.IsBillWise && SelectedGroup?.Nature is AccountNature.Asset or AccountNature.Liability)
+        {
+            <h2>Opening bills <span class="muted small">(bill-wise breakup of the opening balance)</span></h2>
+            <table class="data">
+                <thead><tr><th>Reference</th><th>Bill date</th><th>Due date</th><th class="num">Amount</th><th>Dr / Cr</th><th></th></tr></thead>
+                <tbody>
+                    @for (var i = 0; i < _input.OpeningBills.Count; i++)
+                    {
+                        var bill = _input.OpeningBills[i];
+                        var index = i;
+                        <tr>
+                            <td><input class="input" maxlength="50" @bind="bill.Name" aria-label="@($"Opening bill {index + 1} reference")" /></td>
+                            <td><input class="input" type="date" value="@Fmt.Iso(bill.Date)" @onchange="e => { if (DateOnly.TryParse(e.Value?.ToString(), CultureInfo.InvariantCulture, out var d)) bill.Date = d; }" aria-label="@($"Opening bill {index + 1} date")" /></td>
+                            <td><input class="input" type="date" value="@(bill.DueDate is { } due ? Fmt.Iso(due) : "")" @onchange="e => bill.DueDate = DateOnly.TryParse(e.Value?.ToString(), CultureInfo.InvariantCulture, out var d) ? d : null" aria-label="@($"Opening bill {index + 1} due date")" /></td>
+                            <td><input class="input num" inputmode="decimal" @bind="bill.Amount" aria-label="@($"Opening bill {index + 1} amount")" /></td>
+                            <td>
+                                <select class="input" @bind="bill.Side" aria-label="@($"Opening bill {index + 1} side")">
+                                    <option value="@DrCr.Debit">Dr</option>
+                                    <option value="@DrCr.Credit">Cr</option>
+                                </select>
+                            </td>
+                            <td><button type="button" class="btn small" @onclick="() => _input.OpeningBills.RemoveAt(index)" aria-label="@($"Remove opening bill {index + 1}")">✕</button></td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+            <div class="toolbar" style="margin-top:.4rem">
+                <button type="button" class="btn small" @onclick="AddOpeningBill">+ Opening bill</button>
+                <span class="muted small">Bills total @Fmt.Balance(Math.Max(OpeningBillsSigned, 0), Math.Max(-OpeningBillsSigned, 0)); the rest of the opening balance is on account.</span>
+            </div>
+        }
+
         <h2>Tax and contact details</h2>
         <div class="form-grid">
             <label class="field">GST registration
@@ -133,6 +165,7 @@
                     AddressLine1 = _ledger.AddressLine1, AddressLine2 = _ledger.AddressLine2, City = _ledger.City, Pincode = _ledger.Pincode, Email = _ledger.Email,
                     Phone = _ledger.Phone, CreditPeriodDays = _ledger.CreditPeriodDays, ExpectedVersion = _ledger.Version,
                     GstTaxType = _ledger.GstTaxType, GstRates = _ledger.GstRates.Select(GstRateInput.From).ToList(),
+                    OpeningBills = (_ledger.OpeningBills ?? []).Select(b => new OpeningBillInput { Name = b.Name, Date = b.Date, DueDate = b.DueDate, Amount = b.Amount, Side = b.Side }).ToList(),
                 };
                 _openingText = _ledger.OpeningBalance == 0 ? null : _ledger.OpeningBalance.ToString("0.00", CultureInfo.InvariantCulture);
             }
@@ -153,6 +186,14 @@
 
         return false;
     }
+
+    private decimal OpeningBillsSigned => _input.OpeningBills.Sum(b => b.Side == DrCr.Debit ? b.Amount : -b.Amount);
+
+    private void AddOpeningBill() => _input.OpeningBills.Add(new OpeningBillInput
+    {
+        Date = (State.Company?.BooksBeginningDate ?? State.Today).AddDays(-1),
+        Side = _input.OpeningSide,
+    });
 
     private void SetGroup(ChangeEventArgs e) => _input.GroupId = Guid.TryParse(e.Value?.ToString(), out var g) ? g : Guid.Empty;
 
@@ -184,6 +225,11 @@
         if (_input.GstTaxType != GstTaxType.None)
         {
             _input.GstRates.Clear();
+        }
+
+        if (!_input.IsBillWise || SelectedGroup?.Nature is AccountNature.Income or AccountNature.Expense)
+        {
+            _input.OpeningBills.Clear();
         }
 
         LedgerDto? saved = null;

@@ -229,7 +229,7 @@ internal sealed class SyncChangeApplier(
         var existing = await db.Ledgers.SingleOrDefaultAsync(l => l.Id == s.Id, ct);
         var details = new LedgerDetails(
             s.Alias, s.IsBillWise, s.GstRegistrationType, s.Gstin, s.StateCode, s.Pan, s.AddressLine1, s.AddressLine2,
-            s.City, s.Pincode, s.Email, s.Phone, s.CreditPeriodDays, s.GstTaxType, s.GstRates);
+            s.City, s.Pincode, s.Email, s.Phone, s.CreditPeriodDays, s.GstTaxType, s.GstRates, s.OpeningBills);
         if (s.GstTaxType != GstTaxType.None)
         {
             var hierarchy = new GroupHierarchy(await db.AccountGroups.AsNoTracking().Where(g => g.CompanyId == s.CompanyId).ToListAsync(ct));
@@ -518,13 +518,18 @@ internal sealed class SyncChangeApplier(
             ?? throw new SyncDeferredException("sync.dependency_missing", "The voucher type has not been uploaded yet.");
         await EnsureLedgersPresentAsync(s, ct);
 
+        var billsByLine = (s.BillAllocations ?? []).ToLookup(a => a.LineNo);
         var lines = s.Lines.OrderBy(l => l.LineNo)
-            .Select(l => new VoucherLineSpec(l.LedgerId, l.Side, Money.FromMinor(l.AmountMinor), l.Narration, l.Id))
+            .Select(l => new VoucherLineSpec(
+                l.LedgerId, l.Side, Money.FromMinor(l.AmountMinor), l.Narration, l.Id,
+                billsByLine[l.LineNo].OrderBy(a => a.AllocationNo)
+                    .Select(a => new BillAllocationSpec(a.Kind, a.BillName, a.DueDate, Money.FromMinor(a.AmountMinor), a.Id))
+                    .ToList()))
             .ToList();
         var header = new VoucherHeader(s.Narration, s.Reference, s.ReferenceDate);
 
         var itemLines = ItemLinesOf(s);
-        var existing = await db.Vouchers.Include(v => v.Lines).Include(v => v.ItemLines).SingleOrDefaultAsync(v => v.Id == s.Id, ct);
+        var existing = await db.Vouchers.Include(v => v.Lines).Include(v => v.ItemLines).Include(v => v.BillAllocations).SingleOrDefaultAsync(v => v.Id == s.Id, ct);
         if (existing is null)
         {
             EnsureNew(change);
@@ -537,7 +542,8 @@ internal sealed class SyncChangeApplier(
             if (s.ReversalOfVoucherId is { } originalId)
             {
                 await guard.RequireAsync(s.CompanyId, Permission.VoucherReverse, ct);
-                var original = await db.Vouchers.Include(v => v.Lines).Include(v => v.ItemLines).SingleOrDefaultAsync(v => v.CompanyId == s.CompanyId && v.Id == originalId, ct)
+                var original = await db.Vouchers.Include(v => v.Lines).Include(v => v.ItemLines).Include(v => v.BillAllocations)
+                    .SingleOrDefaultAsync(v => v.CompanyId == s.CompanyId && v.Id == originalId, ct)
                     ?? throw new SyncDeferredException("sync.dependency_missing", "The reversed voucher has not been uploaded yet.");
                 if (await db.Vouchers.AnyAsync(v => v.ReversalOfVoucherId == originalId, ct))
                 {
@@ -547,7 +553,7 @@ internal sealed class SyncChangeApplier(
                 voucher = Voucher.CreateReversal(s.Id, company, original, s.Date, s.Narration, userId, device.Id);
                 var expected = voucher.Lines.Select(l => (l.LedgerId, l.Side, l.AmountMinor)).Order().ToList();
                 var actual = s.Lines.Select(l => (l.LedgerId, l.Side, l.AmountMinor)).Order().ToList();
-                if (!expected.SequenceEqual(actual) || !ItemLinesMatch(voucher, s))
+                if (!expected.SequenceEqual(actual) || !ItemLinesMatch(voucher, s) || !BillsMatch(voucher, s))
                 {
                     throw new SyncRejectedException("voucher.reversal_mismatch", "The reversal does not mirror the original voucher.");
                 }
@@ -696,6 +702,16 @@ internal sealed class SyncChangeApplier(
                 new GstRateEntry(s.Date, l.Taxability, l.IgstMilliPercent, l.CessMilliPercent, l.HsnSac),
                 new LineTax(Money.FromMinor(l.CgstMinor), Money.FromMinor(l.StateTaxMinor), Money.FromMinor(l.IgstMinor), Money.FromMinor(l.CessMinor))))
             .ToList();
+    }
+
+    /// <summary>A reversal's bill allocations must settle exactly what the original allocated (same lines, names, amounts).</summary>
+    private static bool BillsMatch(Voucher derived, VoucherSnapshot s)
+    {
+        var expected = derived.BillAllocations.OrderBy(a => a.LineNo).ThenBy(a => a.AllocationNo)
+            .Select(a => (a.LineNo, a.Kind, Name: a.NormalizedBillName, a.AmountMinor));
+        var actual = (s.BillAllocations ?? []).OrderBy(a => a.LineNo).ThenBy(a => a.AllocationNo)
+            .Select(a => (a.LineNo, a.Kind, Name: BillNames.Clean(a.BillName) is { } n ? BillNames.Normalize(n) : null, a.AmountMinor));
+        return expected.SequenceEqual(actual);
     }
 
     /// <summary>A reversal's invoice lines must be the original's with the stock movement turned around.</summary>

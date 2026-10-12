@@ -286,6 +286,11 @@ namespace TallyNext.Infrastructure.Server.Persistence.Migrations
                     b.Property<long>("OpeningBalanceMinor")
                         .HasColumnType("bigint");
 
+                    b.Property<string>("OpeningBills")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("OpeningBillsJson");
+
                     b.Property<byte>("OpeningSide")
                         .HasColumnType("smallint");
 
@@ -846,6 +851,64 @@ namespace TallyNext.Infrastructure.Server.Persistence.Migrations
                         .HasFilter("\"SequenceNumber\" IS NOT NULL");
 
                     b.ToTable("Vouchers", (string)null);
+                });
+
+            modelBuilder.Entity("TallyNext.Domain.Vouchers.VoucherBillAllocation", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uuid");
+
+                    b.Property<int>("AllocationNo")
+                        .HasColumnType("integer");
+
+                    b.Property<long>("AmountMinor")
+                        .HasColumnType("bigint");
+
+                    b.Property<string>("BillName")
+                        .HasMaxLength(50)
+                        .HasColumnType("character varying(50)");
+
+                    b.Property<Guid>("CompanyId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateOnly?>("DueDate")
+                        .HasColumnType("date");
+
+                    b.Property<bool>("IsPosted")
+                        .HasColumnType("boolean");
+
+                    b.Property<byte>("Kind")
+                        .HasColumnType("smallint");
+
+                    b.Property<Guid>("LedgerId")
+                        .HasColumnType("uuid");
+
+                    b.Property<int>("LineNo")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("NormalizedBillName")
+                        .HasMaxLength(50)
+                        .HasColumnType("character varying(50)");
+
+                    b.Property<byte>("Side")
+                        .HasColumnType("smallint");
+
+                    b.Property<DateOnly>("VoucherDate")
+                        .HasColumnType("date");
+
+                    b.Property<Guid>("VoucherId")
+                        .HasColumnType("uuid");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("LedgerId");
+
+                    b.HasIndex("CompanyId", "LedgerId", "NormalizedBillName");
+
+                    b.HasIndex("VoucherId", "LineNo", "AllocationNo")
+                        .IsUnique();
+
+                    b.ToTable("VoucherBillAllocations", (string)null);
                 });
 
             modelBuilder.Entity("TallyNext.Domain.Vouchers.VoucherItemLine", b =>
@@ -1581,6 +1644,21 @@ namespace TallyNext.Infrastructure.Server.Persistence.Migrations
                         .IsRequired();
                 });
 
+            modelBuilder.Entity("TallyNext.Domain.Vouchers.VoucherBillAllocation", b =>
+                {
+                    b.HasOne("TallyNext.Domain.Accounts.Ledger", null)
+                        .WithMany()
+                        .HasForeignKey("LedgerId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("TallyNext.Domain.Vouchers.Voucher", null)
+                        .WithMany("BillAllocations")
+                        .HasForeignKey("VoucherId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
             modelBuilder.Entity("TallyNext.Domain.Vouchers.VoucherItemLine", b =>
                 {
                     b.HasOne("TallyNext.Domain.Inventory.Godown", null)
@@ -1641,6 +1719,8 @@ namespace TallyNext.Infrastructure.Server.Persistence.Migrations
 
             modelBuilder.Entity("TallyNext.Domain.Vouchers.Voucher", b =>
                 {
+                    b.Navigation("BillAllocations");
+
                     b.Navigation("ItemLines");
 
                     b.Navigation("Lines");

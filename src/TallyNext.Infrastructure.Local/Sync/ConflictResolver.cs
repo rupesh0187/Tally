@@ -228,6 +228,11 @@ public sealed class ConflictResolver(
             {
                 db.Entry(line).Property(nameof(Domain.Vouchers.VoucherItemLine.IsPosted)).CurrentValue = false;
             }
+
+            foreach (var allocation in voucher.BillAllocations)
+            {
+                db.Entry(allocation).Property(nameof(Domain.Vouchers.VoucherBillAllocation.IsPosted)).CurrentValue = false;
+            }
         }
     }
 
@@ -237,7 +242,7 @@ public sealed class ConflictResolver(
         SyncEntityTypes.AccountGroup => await db.AccountGroups.SingleOrDefaultAsync(e => e.Id == entityId, cancellationToken),
         SyncEntityTypes.Ledger => await db.Ledgers.SingleOrDefaultAsync(e => e.Id == entityId, cancellationToken),
         SyncEntityTypes.VoucherType => await db.VoucherTypes.SingleOrDefaultAsync(e => e.Id == entityId, cancellationToken),
-        SyncEntityTypes.Voucher => await db.Vouchers.Include(v => v.Lines).Include(v => v.ItemLines).SingleOrDefaultAsync(e => e.Id == entityId, cancellationToken),
+        SyncEntityTypes.Voucher => await db.Vouchers.Include(v => v.Lines).Include(v => v.ItemLines).Include(v => v.BillAllocations).SingleOrDefaultAsync(e => e.Id == entityId, cancellationToken),
         SyncEntityTypes.Unit => await db.Units.SingleOrDefaultAsync(e => e.Id == entityId, cancellationToken),
         SyncEntityTypes.Godown => await db.Godowns.SingleOrDefaultAsync(e => e.Id == entityId, cancellationToken),
         SyncEntityTypes.StockItem => await db.StockItems.SingleOrDefaultAsync(e => e.Id == entityId, cancellationToken),

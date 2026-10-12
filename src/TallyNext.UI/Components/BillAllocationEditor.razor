@@ -1,0 +1,170 @@
+@* Bill-wise breakup of one voucher line (or one invoice's party amount). Rows: type, reference, due date, amount. *@
+<div class="bills" role="group" aria-label="@($"Bill-wise details for {LedgerName}")">
+    @for (var i = 0; i < Rows.Count; i++)
+    {
+        var index = i;
+        var row = Rows[i];
+        <div class="bill-row">
+            <select id="@KindId(index)" class="input" value="@row.Kind" @onchange="e => SetKind(row, e.Value)" aria-label="@($"Bill {index + 1} type")" data-next="@NameId(index)">
+                <option value="@BillAllocationKind.NewRef">New Ref</option>
+                <option value="@BillAllocationKind.AgstRef">Agst Ref</option>
+                <option value="@BillAllocationKind.Advance">Advance</option>
+                <option value="@BillAllocationKind.OnAccount">On Account</option>
+            </select>
+            <input id="@NameId(index)" class="input" maxlength="50" list="@ListId" aria-label="@($"Bill {index + 1} reference")"
+                   placeholder="@(row.Kind == BillAllocationKind.NewRef ? NewRefPlaceholder : row.Kind == BillAllocationKind.OnAccount ? "—" : "Bill reference")"
+                   disabled="@(row.Kind == BillAllocationKind.OnAccount)" value="@row.BillName" @oninput="e => row.BillName = e.Value?.ToString()" data-next="@AfterName(index)" />
+            @if (row.Kind is BillAllocationKind.NewRef or BillAllocationKind.Advance)
+            {
+                <input id="@DueId(index)" class="input" type="date" aria-label="@($"Bill {index + 1} due date")" value="@(row.DueDate is { } d ? Fmt.Iso(d) : "")"
+                       @onchange="e => row.DueDate = DateOnly.TryParse(e.Value?.ToString(), CultureInfo.InvariantCulture, out var due) ? due : null" data-next="@AmountId(index)" />
+            }
+            else
+            {
+                <span></span>
+            }
+            @if (ShowAmounts)
+            {
+                <input id="@AmountId(index)" class="input num" inputmode="decimal" aria-label="@($"Bill {index + 1} amount")" value="@row.AmountText"
+                       placeholder="@(index == Rows.Count - 1 ? "rest" : "")" @oninput="e => row.AmountText = e.Value?.ToString() ?? string.Empty"
+                       data-next="@(index < Rows.Count - 1 ? KindId(index + 1) : NextId)" />
+            }
+            <button type="button" class="btn small" title="Remove" @onclick="() => Remove(index)" aria-label="@($"Remove bill {index + 1}")">✕</button>
+        </div>
+    }
+    <datalist id="@ListId">
+        @foreach (var p in Pending)
+        {
+            <option value="@p.BillName">@Fmt.AmountOrZero(p.Amount) @p.Side.ToShortLabel()@(p.DueDate is { } due ? $" · due {Fmt.Date(due)}" : "")</option>
+        }
+    </datalist>
+    <div class="toolbar small">
+        @if (ShowAmounts)
+        {
+            <button type="button" class="btn small" @onclick="Add">+ Bill</button>
+            @if (Pending.Count > 0)
+            {
+                <button type="button" class="btn small" @onclick="MatchOldest" title="Settle the oldest pending bills first; the rest goes on account">Match oldest bills</button>
+            }
+            <span class="@(Difference == 0 ? "muted" : "diff")">@(Difference == 0 ? "Fully allocated" : $"Unallocated {Fmt.AmountOrZero(Difference)}") (empty last amount = rest)</span>
+        }
+        else if (Pending.Count > 0)
+        {
+            <span class="muted">@Pending.Count pending bill(s) — pick one as Agst Ref to settle it</span>
+        }
+    </div>
+</div>
+
+@code {
+    public sealed class Row
+    {
+        public BillAllocationKind Kind { get; set; } = BillAllocationKind.NewRef;
+
+        public string? BillName { get; set; }
+
+        public DateOnly? DueDate { get; set; }
+
+        public string AmountText { get; set; } = string.Empty;
+
+        public decimal? Amount => Fmt.ParseAmount(AmountText);
+
+        public BillAllocationInput ToInput(bool withAmount) => new()
+        {
+            Kind = Kind,
+            BillName = Kind == BillAllocationKind.OnAccount ? null : BillName,
+            DueDate = Kind is BillAllocationKind.NewRef or BillAllocationKind.Advance ? DueDate : null,
+            Amount = withAmount ? Amount : null,
+        };
+    }
+
+    [Parameter, EditorRequired]
+    public string IdPrefix { get; set; } = string.Empty;
+
+    [Parameter, EditorRequired]
+    public List<Row> Rows { get; set; } = [];
+
+    [Parameter]
+    public IReadOnlyList<PendingBillDto> Pending { get; set; } = [];
+
+    /// <summary>Amount to allocate (the line amount); null hides the amount column (invoice party: whole total).</summary>
+    [Parameter]
+    public decimal? Total { get; set; }
+
+    /// <summary>Side of the line: pending bills on the opposite side are the ones it can settle.</summary>
+    [Parameter]
+    public DrCr Side { get; set; }
+
+    [Parameter]
+    public string LedgerName { get; set; } = string.Empty;
+
+    [Parameter]
+    public string NewRefPlaceholder { get; set; } = "Voucher number";
+
+    /// <summary>Focus target after the last row (client-side Enter navigation).</summary>
+    [Parameter]
+    public string? NextId { get; set; }
+
+    private bool ShowAmounts => Total is not null;
+
+    private string ListId => $"{IdPrefix}-pending";
+
+    private decimal Difference => Total is { } total && Rows.Count > 0 && Rows[^1].Amount is not null ? total - Rows.Sum(r => r.Amount ?? 0) : 0;
+
+    public string KindId(int index) => $"{IdPrefix}-b{index}-kind";
+
+    private string NameId(int index) => $"{IdPrefix}-b{index}-name";
+
+    private string DueId(int index) => $"{IdPrefix}-b{index}-due";
+
+    private string AmountId(int index) => $"{IdPrefix}-b{index}-amount";
+
+    private string? AfterName(int index) =>
+        Rows[index].Kind is BillAllocationKind.NewRef or BillAllocationKind.Advance ? DueId(index)
+        : ShowAmounts ? AmountId(index)
+        : NextId;
+
+    private static void SetKind(Row row, object? value)
+    {
+        if (Enum.TryParse<BillAllocationKind>(value?.ToString(), out var kind))
+        {
+            row.Kind = kind;
+            if (kind == BillAllocationKind.OnAccount)
+            {
+                row.BillName = null;
+                row.DueDate = null;
+            }
+        }
+    }
+
+    private void Add() => Rows.Add(new Row { Kind = BillAllocationKind.AgstRef });
+
+    private void Remove(int index) => Rows.RemoveAt(index);
+
+    /// <summary>Settles pending bills on the opposite side, oldest due first; any remainder goes on account.</summary>
+    private void MatchOldest()
+    {
+        if (Total is not { } total)
+        {
+            return;
+        }
+
+        Rows.Clear();
+        var remaining = total;
+        foreach (var bill in Pending.Where(p => p.Side != Side))
+        {
+            if (remaining <= 0)
+            {
+                break;
+            }
+
+            var take = Math.Min(remaining, bill.Amount);
+            Rows.Add(new Row { Kind = BillAllocationKind.AgstRef, BillName = bill.BillName, AmountText = take.ToString("0.00", CultureInfo.InvariantCulture) });
+            remaining -= take;
+        }
+
+        if (remaining > 0)
+        {
+            Rows.Add(new Row { Kind = BillAllocationKind.OnAccount, AmountText = remaining.ToString("0.00", CultureInfo.InvariantCulture) });
+        }
+    }
+}

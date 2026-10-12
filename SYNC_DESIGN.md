@@ -23,7 +23,7 @@ explicit conflict handling. Protocol constants live in `Contracts/Sync/SyncProto
 |---|---|---|
 | Company | ↑↓ | creation from a device allowed (creator becomes Owner on the server) |
 | AccountGroup, Ledger, VoucherType | ↑↓ | conflicts on concurrent edits; tombstones for deletes |
-| Voucher (+ lines, + invoice item lines) | ↑↓ | posted vouchers immutable; numbered in the creating device's series; invoices re-derived and re-validated by the server |
+| Voucher (+ lines, + invoice item lines, + bill allocations) | ↑↓ | posted vouchers immutable; numbered in the creating device's series; invoices re-derived and re-validated by the server; bill breakups must add up to their lines |
 | Unit, Godown, StockItem | ↑↓ | like ledgers: conflicts on concurrent edits, tombstones, duplicate names rejected; GST rate histories travel inside the item/ledger snapshot |
 | CompanyMembership | ↓ only | authored by the server; enforces offline authorization |
 | Audit | — | each store keeps its own chain; the server audits every accepted/rejected upload |
@@ -108,6 +108,9 @@ pending count and last success time are observable by the UI.
 | Device unknown schema/protocol | HTTP 426; nothing applied; the app asks for an update. |
 | Invoice whose tax, values or postings do not follow from its lines | `Rejected` (`invoice.tax_mismatch`, `invoice.value_mismatch`, `invoice.accounting_mismatch`); nothing applied. |
 | Two devices sell the last units of an item offline | Both accepted; stock goes negative and the Stock Summary flags the item. Stock is a valuation, not a hard constraint, in a distributed system. |
+| Two devices settle the same bill offline | Both accepted; the bill shows a negative pending amount (over-settled) until corrected. |
+| A settlement names a bill the server has never received | Accepted (bill existence is checked only for user input); the outstanding report shows it as an unmatched bill. Rejecting it would lose a real receipt or payment. |
+| Same new bill name created on two devices | Both accepted; the allocations merge into one bill (bills are identified by party + name). The default name is the voucher number, which is unique per device series. |
 
 ## Conflict window
 

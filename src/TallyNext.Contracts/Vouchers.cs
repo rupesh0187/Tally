@@ -17,7 +17,30 @@ public sealed class VoucherLineInput
     public decimal Amount { get; set; }
 
     public string? Narration { get; set; }
+
+    /// <summary>
+    /// Bill-wise breakup for a bill-wise ledger. When omitted, a default is applied: on account for Contra, Payment and
+    /// Receipt; otherwise a new bill named after the voucher number, due after the ledger's credit period.
+    /// </summary>
+    public List<BillAllocationInput>? Bills { get; set; }
 }
+
+/// <summary>One bill allocation of a voucher line.</summary>
+public sealed class BillAllocationInput
+{
+    public BillAllocationKind Kind { get; set; } = BillAllocationKind.NewRef;
+
+    /// <summary>Bill reference. For a new bill, empty means "the voucher number".</summary>
+    public string? BillName { get; set; }
+
+    /// <summary>For a new bill or advance; defaults to the voucher date plus the ledger's credit period.</summary>
+    public DateOnly? DueDate { get; set; }
+
+    /// <summary>Amount allocated; at most one allocation per line may leave it empty to take the remainder.</summary>
+    public decimal? Amount { get; set; }
+}
+
+public sealed record BillAllocationDto(Guid Id, BillAllocationKind Kind, string? BillName, DateOnly? DueDate, decimal Amount);
 
 public sealed class VoucherInput
 {
@@ -46,7 +69,7 @@ public sealed class VoucherInput
     public long? ExpectedVersion { get; set; }
 }
 
-public sealed record VoucherLineDto(Guid Id, int LineNo, Guid LedgerId, string LedgerName, DrCr Side, decimal Amount, string? Narration);
+public sealed record VoucherLineDto(Guid Id, int LineNo, Guid LedgerId, string LedgerName, DrCr Side, decimal Amount, string? Narration, IReadOnlyList<BillAllocationDto>? Bills = null);
 
 public sealed record VoucherDto(
     Guid Id,
@@ -143,6 +166,12 @@ public sealed class InvoiceRequest
     public string? IdempotencyKey { get; set; }
 
     public long? ExpectedVersion { get; set; }
+
+    /// <summary>
+    /// Bill reference of the party amount when the party ledger is bill-wise (the amount is always the invoice total).
+    /// Defaults to a new bill named after the voucher number, due after the party's credit period.
+    /// </summary>
+    public BillAllocationInput? PartyBill { get; set; }
 
     public List<InvoiceRequestLine> Lines { get; set; } = [];
 }

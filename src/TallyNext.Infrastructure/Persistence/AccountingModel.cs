@@ -34,6 +34,7 @@ public static class AccountingModel
         ConfigureVoucher(modelBuilder.Entity<Voucher>());
         ConfigureVoucherLine(modelBuilder.Entity<VoucherLine>());
         ConfigureVoucherItemLine(modelBuilder.Entity<VoucherItemLine>());
+        ConfigureBillAllocation(modelBuilder.Entity<VoucherBillAllocation>());
         ConfigureUnit(modelBuilder.Entity<UnitOfMeasure>());
         ConfigureGodown(modelBuilder.Entity<Godown>());
         ConfigureStockItem(modelBuilder.Entity<StockItem>());
@@ -128,6 +129,10 @@ public static class AccountingModel
         b.Property(l => l.Email).HasMaxLength(254);
         b.Property(l => l.Phone).HasMaxLength(30);
         ConfigureGstRates(b.Property(l => l.GstRates));
+        b.Property(l => l.OpeningBills)
+            .HasConversion(new OpeningBillsConverter(), new OpeningBillsComparer())
+            .HasColumnName("OpeningBillsJson")
+            .IsRequired();
         b.HasIndex(l => new { l.CompanyId, l.NormalizedName }).IsUnique().HasFilter(NotDeletedFilter);
         b.HasIndex(l => new { l.CompanyId, l.GroupId });
         b.HasOne<Company>().WithMany().HasForeignKey(l => l.CompanyId).OnDelete(DeleteBehavior.Restrict);
@@ -171,6 +176,11 @@ public static class AccountingModel
             .HasForeignKey(l => l.VoucherId)
             .OnDelete(DeleteBehavior.Cascade);
         b.Navigation(v => v.ItemLines).UsePropertyAccessMode(PropertyAccessMode.Field).HasField("_itemLines");
+        b.HasMany(v => v.BillAllocations)
+            .WithOne()
+            .HasForeignKey(a => a.VoucherId)
+            .OnDelete(DeleteBehavior.Cascade);
+        b.Navigation(v => v.BillAllocations).UsePropertyAccessMode(PropertyAccessMode.Field).HasField("_billAllocations");
         b.HasOne<Ledger>().WithMany().HasForeignKey(v => v.PartyLedgerId).OnDelete(DeleteBehavior.Restrict);
 
         // Registers and Day Book: company + date range, stable order by id.
@@ -220,6 +230,20 @@ public static class AccountingModel
         b.HasOne<StockItem>().WithMany().HasForeignKey(l => l.StockItemId).OnDelete(DeleteBehavior.Restrict);
         b.HasOne<Godown>().WithMany().HasForeignKey(l => l.GodownId).OnDelete(DeleteBehavior.Restrict);
         b.HasOne<Ledger>().WithMany().HasForeignKey(l => l.LedgerId).OnDelete(DeleteBehavior.Restrict);
+    }
+
+    private static void ConfigureBillAllocation(EntityTypeBuilder<VoucherBillAllocation> b)
+    {
+        b.ToTable("VoucherBillAllocations");
+        b.HasKey(a => a.Id);
+        b.Property(a => a.Id).ValueGeneratedNever();
+        b.Property(a => a.BillName).HasMaxLength(BillNames.MaxLength);
+        b.Property(a => a.NormalizedBillName).HasMaxLength(BillNames.MaxLength);
+
+        // Outstanding: one party's bills by name; pending-bill lookups during entry.
+        b.HasIndex(a => new { a.CompanyId, a.LedgerId, a.NormalizedBillName });
+        b.HasIndex(a => new { a.VoucherId, a.LineNo, a.AllocationNo }).IsUnique();
+        b.HasOne<Ledger>().WithMany().HasForeignKey(a => a.LedgerId).OnDelete(DeleteBehavior.Restrict);
     }
 
     private static void ConfigureUnit(EntityTypeBuilder<UnitOfMeasure> b)
@@ -319,6 +343,15 @@ public static class AccountingModel
         v => string.IsNullOrEmpty(v) ? new List<GstRateEntry>() : JsonSerializer.Deserialize<List<GstRateEntry>>(v, GstRatesJson) ?? new List<GstRateEntry>());
 
     private sealed class GstRatesComparer() : ValueComparer<IReadOnlyList<GstRateEntry>>(
+        (a, b) => a == null ? b == null : b != null && a.SequenceEqual(b),
+        v => v.Aggregate(0, (hash, e) => HashCode.Combine(hash, e)),
+        v => v.ToList());
+
+    private sealed class OpeningBillsConverter() : ValueConverter<IReadOnlyList<OpeningBill>, string>(
+        v => JsonSerializer.Serialize(v, GstRatesJson),
+        v => string.IsNullOrEmpty(v) ? new List<OpeningBill>() : JsonSerializer.Deserialize<List<OpeningBill>>(v, GstRatesJson) ?? new List<OpeningBill>());
+
+    private sealed class OpeningBillsComparer() : ValueComparer<IReadOnlyList<OpeningBill>>(
         (a, b) => a == null ? b == null : b != null && a.SequenceEqual(b),
         v => v.Aggregate(0, (hash, e) => HashCode.Combine(hash, e)),
         v => v.ToList());

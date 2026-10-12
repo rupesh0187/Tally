@@ -3,6 +3,7 @@
 @inherits AppPage
 @inject IJSRuntime JS
 @inject IServiceProvider Services
+@inject LedgerCache LedgerCache
 
 <PageTitle>@(_type?.Name ?? "Voucher") — TallyNext</PageTitle>
 
@@ -53,7 +54,7 @@
                     <div class="line" role="row">
                         <button type="button" class="side-toggle @(line.Side == DrCr.Debit ? "dr" : "cr")" @onclick="() => Toggle(index)"
                                 aria-label="@($"Line {index + 1}: {(line.Side == DrCr.Debit ? "debit" : "credit")}, press to switch")">@line.Side.ToShortLabel()</button>
-                        <LedgerPicker Id="@LedgerId(index)" CompanyId="State.CompanyId" Value="line.LedgerId" ValueChanged="id => LedgerChosen(index, id)"
+                        <LedgerPicker Id="@LedgerId(index)" CompanyId="State.CompanyId" Value="line.LedgerId" ValueChanged="id => LedgerChosenAsync(index, id)"
                                       NextId="@AmountId(index)" Filter="FilterFor(line)" OnCommitted="() => FocusAsync(AmountId(index))"
                                       Invalid="@(_showValidation && line.LedgerId is null && line.HasContent)" Label="@($"Ledger for line {index + 1}")" />
                         <input id="@AmountId(index)" class="input num @(_showValidation && line.LedgerId is not null && !line.HasAmount ? "invalid" : "")"
@@ -63,6 +64,21 @@
                         <button type="button" class="btn small" title="Remove line" disabled="@(_lines.Count <= 2)" @onclick="() => Remove(index)"
                                 aria-label="@($"Remove line {index + 1}")">✕</button>
                     </div>
+                    @if (BillWiseLedger(line) is { } billWise)
+                    {
+                        <div class="line-bills">
+                            @if (line.ShowBills)
+                            {
+                                <BillAllocationEditor IdPrefix="@($"l{index}")" Rows="line.Bills" Pending="line.Pending" Total="line.Amount ?? 0" Side="line.Side"
+                                                      LedgerName="@billWise.Name" NextId="@AfterBills(index)" />
+                            }
+                            else
+                            {
+                                <span class="muted small">Bill-wise: @DefaultBillText(billWise)@(line.Pending.Count > 0 ? $" · {line.Pending.Count} pending bill(s)" : "")</span>
+                                <button type="button" class="btn small" @onclick="() => EditBills(index)">Bill-wise details…</button>
+                            }
+                        </div>
+                    }
                 }
             </div>
             <button type="button" class="btn small" style="margin-top:.5rem" @onclick="() => AddLineAsync(null)">+ Add line</button>
@@ -121,7 +137,16 @@
         public bool HasAmount => Amount is > 0;
 
         public bool HasContent => HasAmount || LedgerId is not null;
+
+        /// <summary>Explicit bill-wise breakup; while hidden, the application applies its default.</summary>
+        public bool ShowBills { get; set; }
+
+        public List<BillAllocationEditor.Row> Bills { get; } = [];
+
+        public IReadOnlyList<PendingBillDto> Pending { get; set; } = [];
     }
+
+    private Dictionary<Guid, LedgerLookupItem> _ledgerIndex = [];
 
     private IReadOnlyList<VoucherTypeDto> _types = [];
     private VoucherTypeDto? _type;
@@ -173,6 +198,7 @@
         await RunAsync(async () =>
         {
             _types = await Runner.RunAsync<VoucherService, IReadOnlyList<VoucherTypeDto>>(s => s.ListTypesAsync(State.CompanyId));
+            _ledgerIndex = (await LedgerCache.GetAsync(State.CompanyId)).ToDictionary(l => l.Id);
             if (EditId is { } id)
             {
                 var voucher = await Runner.RunAsync<VoucherService, VoucherDto>(s => s.GetAsync(State.CompanyId, id));
@@ -187,7 +213,21 @@
                 _reference = voucher.Reference;
                 _narration = voucher.Narration;
                 _lines.Clear();
-                _lines.AddRange(voucher.Lines.Select(l => new LineModel { Side = l.Side, LedgerId = l.LedgerId, AmountText = l.Amount.ToString("0.00", CultureInfo.InvariantCulture) }));
+                foreach (var l in voucher.Lines)
+                {
+                    var model = new LineModel { Side = l.Side, LedgerId = l.LedgerId, AmountText = l.Amount.ToString("0.00", CultureInfo.InvariantCulture) };
+                    if (l.Bills is { Count: > 0 } bills)
+                    {
+                        model.ShowBills = true;
+                        model.Bills.AddRange(bills.Select(b => new BillAllocationEditor.Row
+                        {
+                            Kind = b.Kind, BillName = b.BillName, DueDate = b.DueDate, AmountText = b.Amount.ToString("0.00", CultureInfo.InvariantCulture),
+                        }));
+                    }
+
+                    _lines.Add(model);
+                    await LoadPendingAsync(model);
+                }
             }
             else
             {
@@ -298,14 +338,70 @@
         }
     }
 
+    private LedgerLookupItem? BillWiseLedger(LineModel line) =>
+        line.LedgerId is { } id && _ledgerIndex.TryGetValue(id, out var ledger) && ledger.IsBillWise ? ledger : null;
+
+    private string DefaultBillText(LedgerLookupItem ledger) => _type?.BaseType is VoucherBaseType.Contra or VoucherBaseType.Payment or VoucherBaseType.Receipt
+        ? "on account (not linked to a bill)"
+        : $"new bill named after the voucher number{(ledger.CreditPeriodDays is { } days ? $", due {Fmt.Date(_date.AddDays(days))}" : "")}";
+
+    private async Task LoadPendingAsync(LineModel line)
+    {
+        line.Pending = BillWiseLedger(line) is { } ledger
+            ? await Runner.RunAsync<BillWiseService, IReadOnlyList<PendingBillDto>>(s => s.PendingBillsAsync(State.CompanyId, ledger.Id))
+            : [];
+    }
+
+    /// <summary>Opens the breakup with the same default the application would apply, or with the oldest bills matched for receipts and payments.</summary>
+    private void EditBills(int index)
+    {
+        var line = _lines[index];
+        line.ShowBills = true;
+        line.Bills.Clear();
+        var settling = _type?.BaseType is VoucherBaseType.Payment or VoucherBaseType.Receipt;
+        var remaining = line.Amount ?? 0;
+        if (settling)
+        {
+            foreach (var bill in line.Pending.Where(p => p.Side != line.Side))
+            {
+                if (remaining <= 0)
+                {
+                    break;
+                }
+
+                var take = Math.Min(remaining, bill.Amount);
+                line.Bills.Add(new BillAllocationEditor.Row { Kind = BillAllocationKind.AgstRef, BillName = bill.BillName, AmountText = take.ToString("0.00", CultureInfo.InvariantCulture) });
+                remaining -= take;
+            }
+        }
+
+        if (remaining > 0 || line.Bills.Count == 0)
+        {
+            var ledger = BillWiseLedger(line);
+            line.Bills.Add(settling
+                ? new BillAllocationEditor.Row { Kind = BillAllocationKind.OnAccount }
+                : new BillAllocationEditor.Row { Kind = BillAllocationKind.NewRef, DueDate = ledger?.CreditPeriodDays is { } days ? _date.AddDays(days) : null });
+        }
+    }
+
+    private string AfterBills(int index) => index < _lines.Count - 1 ? LedgerId(index + 1) : "v-narration";
+
     /// <summary>
     /// When a ledger is chosen for a line with no amount yet, offer the amount that balances the voucher on this
     /// line's side (the amount field selects its text on focus, so typing replaces the suggestion).
     /// </summary>
-    private void LedgerChosen(int index, Guid? ledgerId)
+    private async Task LedgerChosenAsync(int index, Guid? ledgerId)
     {
         var line = _lines[index];
+        var changed = line.LedgerId != ledgerId;
         line.LedgerId = ledgerId;
+        if (changed)
+        {
+            line.ShowBills = false;
+            line.Bills.Clear();
+            await LoadPendingAsync(line);
+        }
+
         if (ledgerId is null || !string.IsNullOrWhiteSpace(line.AmountText))
         {
             return;
@@ -321,6 +417,12 @@
     /// <summary>Client-side Enter target for an amount field; null when the server must decide (adding a line).</summary>
     private string? NextAfterAmount(int index)
     {
+        if (_lines[index].ShowBills && _lines[index].Bills.Count > 0)
+        {
+            _lastAmountHadClientTarget = true;
+            return $"l{index}-b0-kind";
+        }
+
         if (index < _lines.Count - 1)
         {
             return LedgerId(index + 1);
@@ -409,7 +511,13 @@
             Reference = _reference,
             Narration = _narration,
             Post = post,
-            Lines = filled.Select(l => new VoucherLineInput { LedgerId = l.LedgerId!.Value, Side = l.Side, Amount = l.Amount!.Value }).ToList(),
+            Lines = filled.Select(l => new VoucherLineInput
+            {
+                LedgerId = l.LedgerId!.Value,
+                Side = l.Side,
+                Amount = l.Amount!.Value,
+                Bills = l.ShowBills && BillWiseLedger(l) is not null ? l.Bills.Select(b => b.ToInput(withAmount: true)).ToList() : null,
+            }).ToList(),
         };
 
         VoucherDto? saved = null;

@@ -150,6 +150,11 @@ namespace TallyNext.Infrastructure.Local.Persistence.Migrations
                     b.Property<long>("OpeningBalanceMinor")
                         .HasColumnType("INTEGER");
 
+                    b.Property<string>("OpeningBills")
+                        .IsRequired()
+                        .HasColumnType("TEXT")
+                        .HasColumnName("OpeningBillsJson");
+
                     b.Property<byte>("OpeningSide")
                         .HasColumnType("INTEGER");
 
@@ -703,6 +708,64 @@ namespace TallyNext.Infrastructure.Local.Persistence.Migrations
                         .HasFilter("\"SequenceNumber\" IS NOT NULL");
 
                     b.ToTable("Vouchers", (string)null);
+                });
+
+            modelBuilder.Entity("TallyNext.Domain.Vouchers.VoucherBillAllocation", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("AllocationNo")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<long>("AmountMinor")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("BillName")
+                        .HasMaxLength(50)
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid>("CompanyId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateOnly?>("DueDate")
+                        .HasColumnType("TEXT");
+
+                    b.Property<bool>("IsPosted")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<byte>("Kind")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<Guid>("LedgerId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("LineNo")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("NormalizedBillName")
+                        .HasMaxLength(50)
+                        .HasColumnType("TEXT");
+
+                    b.Property<byte>("Side")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<DateOnly>("VoucherDate")
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid>("VoucherId")
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("LedgerId");
+
+                    b.HasIndex("CompanyId", "LedgerId", "NormalizedBillName");
+
+                    b.HasIndex("VoucherId", "LineNo", "AllocationNo")
+                        .IsUnique();
+
+                    b.ToTable("VoucherBillAllocations", (string)null);
                 });
 
             modelBuilder.Entity("TallyNext.Domain.Vouchers.VoucherItemLine", b =>
@@ -1328,6 +1391,21 @@ namespace TallyNext.Infrastructure.Local.Persistence.Migrations
                         .IsRequired();
                 });
 
+            modelBuilder.Entity("TallyNext.Domain.Vouchers.VoucherBillAllocation", b =>
+                {
+                    b.HasOne("TallyNext.Domain.Accounts.Ledger", null)
+                        .WithMany()
+                        .HasForeignKey("LedgerId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("TallyNext.Domain.Vouchers.Voucher", null)
+                        .WithMany("BillAllocations")
+                        .HasForeignKey("VoucherId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
             modelBuilder.Entity("TallyNext.Domain.Vouchers.VoucherItemLine", b =>
                 {
                     b.HasOne("TallyNext.Domain.Inventory.Godown", null)
@@ -1388,6 +1466,8 @@ namespace TallyNext.Infrastructure.Local.Persistence.Migrations
 
             modelBuilder.Entity("TallyNext.Domain.Vouchers.Voucher", b =>
                 {
+                    b.Navigation("BillAllocations");
+
                     b.Navigation("ItemLines");
 
                     b.Navigation("Lines");

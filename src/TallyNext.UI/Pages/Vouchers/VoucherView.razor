@@ -94,7 +94,13 @@
                 @foreach (var line in v.Lines)
                 {
                     <tr>
-                        <td><a href="@($"reports/ledger?ledger={line.LedgerId}")">@line.LedgerName</a>@if (!string.IsNullOrEmpty(line.Narration)) { <div class="muted small">@line.Narration</div> }</td>
+                        <td>
+                            <a href="@($"reports/ledger?ledger={line.LedgerId}")">@line.LedgerName</a>@if (!string.IsNullOrEmpty(line.Narration)) { <div class="muted small">@line.Narration</div> }
+                            @foreach (var bill in line.Bills ?? [])
+                            {
+                                <div class="muted small">@BillLabel(bill.Kind) @(bill.BillName ?? (bill.Kind == BillAllocationKind.NewRef ? "(voucher number)" : ""))@(bill.DueDate is { } due ? $" · due {Fmt.Date(due)}" : "") · @Fmt.AmountOrZero(bill.Amount)</div>
+                            }
+                        </td>
                         <td class="num">@(line.Side == DrCr.Debit ? Fmt.Amount(line.Amount) : "")</td>
                         <td class="num">@(line.Side == DrCr.Credit ? Fmt.Amount(line.Amount) : "")</td>
                     </tr>
@@ -116,6 +122,14 @@
 
 @code {
     private VoucherDto? _voucher;
+
+    private static string BillLabel(BillAllocationKind kind) => kind switch
+    {
+        BillAllocationKind.NewRef => "New Ref",
+        BillAllocationKind.AgstRef => "Agst Ref",
+        BillAllocationKind.Advance => "Advance",
+        _ => "On Account",
+    };
 
     private static string SupplyLabel(InvoiceDetailsDto invoice)
     {

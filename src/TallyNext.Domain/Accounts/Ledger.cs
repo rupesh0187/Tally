@@ -31,7 +31,8 @@ public sealed record LedgerDetails(
     string? Phone = null,
     int? CreditPeriodDays = null,
     GstTaxType GstTaxType = GstTaxType.None,
-    IReadOnlyList<GstRateEntry>? GstRates = null);
+    IReadOnlyList<GstRateEntry>? GstRates = null,
+    IReadOnlyList<OpeningBill>? OpeningBills = null);
 
 /// <summary>
 /// An account in the books. Opening balances are as at the company's books-beginning date and are only
@@ -87,6 +88,9 @@ public sealed class Ledger : CompanyScopedEntity
 
     /// <summary>Effective-dated GST rates used when this ledger is billed directly (services, non-stock income).</summary>
     public IReadOnlyList<GstRateEntry> GstRates { get; private set; } = [];
+
+    /// <summary>Bill-wise breakup of the opening balance (bill-wise ledgers only).</summary>
+    public IReadOnlyList<OpeningBill> OpeningBills { get; private set; } = [];
 
     public bool IsSystem => SystemKey is not null;
 
@@ -155,7 +159,7 @@ public sealed class Ledger : CompanyScopedEntity
     }
 
     public LedgerDetails GetDetails() => new(
-        Alias, IsBillWise, GstRegistrationType, Gstin, StateCode, Pan, AddressLine1, AddressLine2, City, Pincode, Email, Phone, CreditPeriodDays, GstTaxType, GstRates);
+        Alias, IsBillWise, GstRegistrationType, Gstin, StateCode, Pan, AddressLine1, AddressLine2, City, Pincode, Email, Phone, CreditPeriodDays, GstTaxType, GstRates, OpeningBills);
 
     public GstRateEntry? GstRateOn(DateOnly date) => GstRateSchedule.Resolve(GstRates, date);
 
@@ -255,6 +259,7 @@ public sealed class Ledger : CompanyScopedEntity
         CreditPeriodDays = details.CreditPeriodDays;
         GstTaxType = details.GstTaxType;
         GstRates = GstRateSchedule.Normalize(details.GstRates);
+        OpeningBills = OpeningBill.Normalize(details.OpeningBills, details.IsBillWise);
     }
 
     private void EnsureNotDeleted()

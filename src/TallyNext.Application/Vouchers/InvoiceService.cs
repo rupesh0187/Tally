@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using TallyNext.Application.Abstractions;
+using TallyNext.Application.Bills;
 using TallyNext.Application.Common;
 using TallyNext.Application.Security;
 using TallyNext.Application.Sync;
@@ -70,17 +71,19 @@ public sealed class InvoiceService(
         }
 
         var prepared = await PrepareAsync(companyId, request, cancellationToken);
+        var lines = await WithPartyBillAsync(companyId, prepared, request, cancellationToken);
         var voucher = Voucher.CreateDraft(
             request.Id ?? Ids.New(),
             prepared.Company,
             prepared.Type,
             request.Date,
             new VoucherHeader(request.Narration, request.Reference, request.ReferenceDate),
-            prepared.Draft.AccountingLines,
+            lines,
             userId,
             context.DeviceId,
             key);
         voucher.SetInvoiceDetails(prepared.Party.Id, prepared.PlaceOfSupply, prepared.Nature, prepared.Draft.ItemLines);
+        await BillAllocationRules.EnsureReferencesExistAsync(db, voucher, cancellationToken);
         await rules.ValidateAsync(voucher, forPosting: request.Post, cancellationToken);
         if (request.Post)
         {
@@ -101,7 +104,7 @@ public sealed class InvoiceService(
         var userId = context.RequireUserId();
 
         await using var scope = await db.BeginCompanyWriteAsync(companyId, cancellationToken);
-        var voucher = await db.Vouchers.Include(v => v.Lines).Include(v => v.ItemLines)
+        var voucher = await db.Vouchers.Include(v => v.Lines).Include(v => v.ItemLines).Include(v => v.BillAllocations)
             .SingleOrDefaultAsync(v => v.CompanyId == companyId && v.Id == voucherId && !v.IsDeleted, cancellationToken)
             ?? throw new NotFoundException("voucher");
         if (request.ExpectedVersion is { } expected && expected != voucher.Version)
@@ -116,8 +119,10 @@ public sealed class InvoiceService(
 
         var prepared = await PrepareAsync(companyId, request, cancellationToken);
         var before = SnapshotMapper.ToSnapshot(voucher);
-        voucher.UpdateDraft(prepared.Company, request.Date, new VoucherHeader(request.Narration, request.Reference, request.ReferenceDate), prepared.Draft.AccountingLines);
+        var lines = await WithPartyBillAsync(companyId, prepared, request, cancellationToken);
+        voucher.UpdateDraft(prepared.Company, request.Date, new VoucherHeader(request.Narration, request.Reference, request.ReferenceDate), lines);
         voucher.SetInvoiceDetails(prepared.Party.Id, prepared.PlaceOfSupply, prepared.Nature, prepared.Draft.ItemLines);
+        await BillAllocationRules.EnsureReferencesExistAsync(db, voucher, cancellationToken);
         await rules.ValidateAsync(voucher, forPosting: request.Post, cancellationToken);
         if (request.Post)
         {
@@ -128,6 +133,24 @@ public sealed class InvoiceService(
         await db.SaveChangesAsync(cancellationToken);
         await scope.CommitAsync(cancellationToken);
         return await vouchers.GetAsync(companyId, voucher.Id, cancellationToken);
+    }
+
+    /// <summary>
+    /// The derived accounting lines with the party's bill reference: the requested one (for the whole invoice total),
+    /// or a new bill named after the voucher number (the supplier's bill number for purchases, when given).
+    /// </summary>
+    private Task<List<VoucherLineSpec>> WithPartyBillAsync(Guid companyId, Prepared prepared, InvoiceRequest request, CancellationToken cancellationToken)
+    {
+        var lines = prepared.Draft.AccountingLines;
+        var inputs = lines
+            .Select(l => l.LedgerId == prepared.Party.Id && request.PartyBill is { } bill
+                ? (IReadOnlyList<BillAllocationInput>?)[new BillAllocationInput { Kind = bill.Kind, BillName = bill.BillName, DueDate = bill.DueDate }]
+                : null)
+            .ToList();
+        return BillAllocationRules.ApplyAsync(
+            db, companyId, prepared.Type.BaseType, request.Date, lines, inputs,
+            prepared.Type.BaseType == VoucherBaseType.Purchase ? request.Reference : null,
+            cancellationToken);
     }
 
     private async Task<Prepared> PrepareAsync(Guid companyId, InvoiceRequest request, CancellationToken cancellationToken)

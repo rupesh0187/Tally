@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Mvc;
 using TallyNext.Application.Accounts;
 using TallyNext.Application.Audit;
+using TallyNext.Application.Bills;
 using TallyNext.Application.Companies;
 using TallyNext.Application.Inventory;
 using TallyNext.Application.Reports;
@@ -10,6 +11,7 @@ using TallyNext.Contracts.Accounts;
 using TallyNext.Contracts.Audit;
 using TallyNext.Contracts.Companies;
 using TallyNext.Contracts.Inventory;
+using TallyNext.Contracts.Reports;
 using TallyNext.Contracts.Vouchers;
 using TallyNext.Domain.Vouchers;
 
@@ -84,6 +86,9 @@ internal static class AccountingEndpoints
                 PageSize = pageSize ?? Contracts.Paging.DefaultPageSize,
             }, ct)));
         ledgers.MapGet("/lookup", async (Guid companyId, ChartOfAccountsService s, CancellationToken ct) => TypedResults.Ok(await s.LookupLedgersAsync(companyId, ct)));
+        ledgers.MapGet("/{ledgerId:guid}/pending-bills", async (Guid companyId, Guid ledgerId, DateOnly? asAt, BillWiseService s, CancellationToken ct) =>
+                TypedResults.Ok(await s.PendingBillsAsync(companyId, ledgerId, asAt, ct)))
+            .WithSummary("Bills of a bill-wise ledger with a pending amount (to choose what a payment or receipt settles).");
         ledgers.MapGet("/{ledgerId:guid}", async (Guid companyId, Guid ledgerId, ChartOfAccountsService s, CancellationToken ct) => TypedResults.Ok(await s.GetLedgerAsync(companyId, ledgerId, ct)));
         ledgers.MapPost("/", async (Guid companyId, LedgerInput r, ChartOfAccountsService s, CancellationToken ct) => TypedResults.Ok(await s.CreateLedgerAsync(companyId, r, ct)));
         ledgers.MapPut("/{ledgerId:guid}", async (Guid companyId, Guid ledgerId, LedgerInput r, ChartOfAccountsService s, CancellationToken ct) => TypedResults.Ok(await s.UpdateLedgerAsync(companyId, ledgerId, r, ct)));
@@ -193,6 +198,9 @@ internal static class AccountingEndpoints
             TypedResults.Ok(await s.CashAndBankSummaryAsync(companyId, from, to, ct)));
         g.MapGet("/stock-summary", async (Guid companyId, DateOnly from, DateOnly to, ReportService s, CancellationToken ct) =>
             TypedResults.Ok(await s.StockSummaryAsync(companyId, from, to, ct)));
+        g.MapGet("/outstanding", async (Guid companyId, OutstandingKind kind, DateOnly asAt, Guid? ledgerId, BillWiseService s, CancellationToken ct) =>
+            TypedResults.Ok(await s.OutstandingAsync(companyId, kind, asAt, ledgerId, ct)))
+            .WithSummary("Pending bills with ageing and on-account amounts (kind = Receivables or Payables).");
         g.MapGet("/gst-summary", async (Guid companyId, DateOnly from, DateOnly to, ReportService s, CancellationToken ct) =>
             TypedResults.Ok(await s.GstSummaryAsync(companyId, from, to, ct)))
             .WithSummary("Outward and inward supplies by rate with tax. An aid for returns, not a return.");

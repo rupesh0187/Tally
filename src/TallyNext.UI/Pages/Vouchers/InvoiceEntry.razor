@@ -59,6 +59,22 @@
                 </label>
             </div>
 
+            @if (_partyLedger is { IsBillWise: true } party)
+            {
+                <div class="line-bills" style="padding-left:0">
+                    @if (_showPartyBills)
+                    {
+                        <BillAllocationEditor IdPrefix="i-party" Rows="_partyBills" Pending="_partyPending" Total="null" Side="@(IsOutward ? DrCr.Debit : DrCr.Credit)"
+                                              LedgerName="@party.Name" NewRefPlaceholder="@(_type?.BaseType == VoucherBaseType.Purchase && !string.IsNullOrWhiteSpace(_reference) ? _reference : "Voucher number")" />
+                    }
+                    else
+                    {
+                        <span class="muted small">Bill-wise: @PartyBillText(party)@(_partyPending.Count > 0 ? $" · {_partyPending.Count} pending bill(s)" : "")</span>
+                        <button type="button" class="btn small" @onclick="EditPartyBill">Bill reference…</button>
+                    }
+                </div>
+            }
+
             <div class="lines invoice-lines" role="table" aria-label="Invoice lines">
                 <div class="line head" role="row">
                     <span role="columnheader">Type</span><span role="columnheader">Item / description</span><span role="columnheader">Godown</span>
@@ -243,6 +259,10 @@
     private IReadOnlyList<StockItemLookup> _items = [];
     private IReadOnlyList<GodownDto> _godowns = [];
     private IReadOnlyList<LedgerLookupItem> _itemLedgers = [];
+    private LedgerLookupItem? _partyLedger;
+    private IReadOnlyList<PendingBillDto> _partyPending = [];
+    private readonly List<BillAllocationEditor.Row> _partyBills = [];
+    private bool _showPartyBills;
     private readonly List<LineModel> _lines = [];
     private readonly List<VoucherDto> _recent = [];
     private DateOnly _date;
@@ -348,6 +368,13 @@
                 _narration = voucher.Narration;
                 _expectedVersion = voucher.Version;
                 _roundOff = invoice.RoundOff != 0 || invoice.GrandTotal == decimal.Truncate(invoice.GrandTotal);
+                await LoadPartyAsync(invoice.PartyLedgerId);
+                if (voucher.Lines.FirstOrDefault(l => l.LedgerId == invoice.PartyLedgerId)?.Bills is { Count: > 0 } partyBills)
+                {
+                    _showPartyBills = true;
+                    _partyBills.AddRange(partyBills.Take(1).Select(b => new BillAllocationEditor.Row { Kind = b.Kind, BillName = b.BillName, DueDate = b.DueDate }));
+                }
+
                 _lines.Clear();
                 _lines.AddRange(invoice.Lines.Select(l => new LineModel
                 {
@@ -466,8 +493,45 @@
 
     private async Task PartyChosenAsync(Guid? id)
     {
+        if (_party != id)
+        {
+            _showPartyBills = false;
+            _partyBills.Clear();
+        }
+
         _party = id;
+        await LoadPartyAsync(id);
         await RefreshPreviewAsync();
+    }
+
+    private async Task LoadPartyAsync(Guid? id)
+    {
+        _partyLedger = id is { } partyId ? (await LedgerCache.GetAsync(State.CompanyId)).FirstOrDefault(l => l.Id == partyId) : null;
+        _partyPending = _partyLedger is { IsBillWise: true } ledger
+            ? await Runner.RunAsync<BillWiseService, IReadOnlyList<PendingBillDto>>(s => s.PendingBillsAsync(State.CompanyId, ledger.Id))
+            : [];
+    }
+
+    private string PartyBillText(LedgerLookupItem party)
+    {
+        var name = _type?.BaseType == VoucherBaseType.Purchase && !string.IsNullOrWhiteSpace(_reference) ? $"'{_reference}'" : "after the voucher number";
+        return $"new bill named {name}{(party.CreditPeriodDays is { } days ? $", due {Fmt.Date(_date.AddDays(days))}" : "")}";
+    }
+
+    private void EditPartyBill()
+    {
+        _showPartyBills = true;
+        _partyBills.Clear();
+        var notes = _type?.BaseType is VoucherBaseType.CreditNote or VoucherBaseType.DebitNote;
+        var settle = notes ? _partyPending.FirstOrDefault(p => p.Side == (IsOutward ? DrCr.Credit : DrCr.Debit)) : null;
+        _partyBills.Add(settle is not null
+            ? new BillAllocationEditor.Row { Kind = BillAllocationKind.AgstRef, BillName = settle.BillName }
+            : new BillAllocationEditor.Row
+            {
+                Kind = BillAllocationKind.NewRef,
+                BillName = _type?.BaseType == VoucherBaseType.Purchase ? _reference : null,
+                DueDate = _partyLedger?.CreditPeriodDays is { } days ? _date.AddDays(days) : null,
+            });
     }
 
     private async Task SetPlaceOfSupplyAsync(ChangeEventArgs e)
@@ -596,6 +660,7 @@
             RoundOff = _roundOff,
             Post = post,
             ExpectedVersion = _expectedVersion,
+            PartyBill = _showPartyBills && _partyLedger is { IsBillWise: true } && _partyBills.Count > 0 ? _partyBills[0].ToInput(withAmount: false) : null,
             Lines = filled.Select(l => new InvoiceRequestLine
             {
                 Kind = l.Kind,
@@ -696,6 +761,10 @@
         _narration = null;
         _party = null;
         _placeOfSupply = null;
+        _partyLedger = null;
+        _partyPending = [];
+        _partyBills.Clear();
+        _showPartyBills = false;
         StartLines();
         _focusDate = true;
     }

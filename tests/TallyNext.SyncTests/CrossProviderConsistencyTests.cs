@@ -1,6 +1,8 @@
 using System.Net.Http.Json;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using TallyNext.Application.Accounts;
+using TallyNext.Application.Bills;
 using TallyNext.Application.Inventory;
 using TallyNext.Application.Reports;
 using TallyNext.Application.Vouchers;
@@ -154,6 +156,65 @@ public sealed class CrossProviderConsistencyTests(ITestOutputHelper output)
     }
 
     [Fact]
+    public async Task Server_and_device_compute_identical_outstanding_reports()
+    {
+        await using var server = new ApiServer();
+        await server.RegisterAsync(Owner);
+        await using var device = await DeviceHost.StartAsync(server);
+        await device.SignInAsync(Owner);
+        var books = await DeviceBooks.CreateAsync(device);
+        var id = books.CompanyId;
+        var groups = await device.RunAsync<ChartOfAccountsService, IReadOnlyList<AccountGroupDto>>(s => s.ListGroupsAsync(id));
+        Guid Group(string name) => groups.Single(g => g.Name == name).Id;
+        async Task<Guid> Ledger(LedgerInput input) => (await device.RunAsync<ChartOfAccountsService, LedgerDto>(s => s.CreateLedgerAsync(id, input))).Id;
+        var customer = await Ledger(new LedgerInput
+        {
+            Name = "Consistency Customer", GroupId = Group("Sundry Debtors"), IsBillWise = true, CreditPeriodDays = 21,
+            OpeningBalance = 1_234.56m, OpeningSide = DrCr.Debit,
+            OpeningBills = [new OpeningBillInput { Name = "O-1", Date = new(2026, 2, 1), DueDate = new(2026, 3, 1), Amount = 1_000.01m }],
+        });
+        var supplier = await Ledger(new LedgerInput { Name = "Consistency Supplier", GroupId = Group("Sundry Creditors"), IsBillWise = true, CreditPeriodDays = 10 });
+        var sales = await Ledger(new LedgerInput { Name = "Consistency Sales", GroupId = Group("Sales Accounts") });
+        var purchases = await Ledger(new LedgerInput { Name = "Consistency Purchases", GroupId = Group("Purchase Accounts") });
+
+        Task<TallyNext.Contracts.Vouchers.VoucherDto> Post(VoucherBaseType type, DateOnly date, params (Guid Ledger, DrCr Side, decimal Amount, List<TallyNext.Contracts.Vouchers.BillAllocationInput>? Bills)[] lines) =>
+            device.RunAsync<TallyNext.Application.Vouchers.VoucherService, TallyNext.Contracts.Vouchers.VoucherDto>(s => s.CreateAsync(id, new TallyNext.Contracts.Vouchers.VoucherInput
+            {
+                VoucherTypeId = books.Types[type],
+                Date = date,
+                Lines = lines.Select(l => new TallyNext.Contracts.Vouchers.VoucherLineInput { LedgerId = l.Ledger, Side = l.Side, Amount = l.Amount, Bills = l.Bills }).ToList(),
+            }));
+        TallyNext.Contracts.Vouchers.BillAllocationInput Bill(BillAllocationKind kind, string? name, decimal? amount = null) => new() { Kind = kind, BillName = name, Amount = amount };
+
+        var s1 = await Post(VoucherBaseType.Sales, new(2026, 4, 5), (customer, DrCr.Debit, 999.99m, null), (sales, DrCr.Credit, 999.99m, null));
+        var s2 = await Post(VoucherBaseType.Sales, new(2026, 5, 17), (customer, DrCr.Debit, 0.05m, null), (sales, DrCr.Credit, 0.05m, null));
+        await Post(VoucherBaseType.Receipt, new(2026, 6, 9), (books.Bank, DrCr.Debit, 700m, null),
+            (customer, DrCr.Credit, 700m, [Bill(BillAllocationKind.AgstRef, "o-1", 600.01m), Bill(BillAllocationKind.AgstRef, s1.Number, 99.99m)]));
+        await Post(VoucherBaseType.Receipt, new(2026, 7, 1), (books.Bank, DrCr.Debit, 250m, null),
+            (customer, DrCr.Credit, 250m, [Bill(BillAllocationKind.Advance, "ADV-X", 200m), Bill(BillAllocationKind.OnAccount, null)]));
+        await Post(VoucherBaseType.Purchase, new(2026, 5, 2), (purchases, DrCr.Debit, 4_321.09m, null), (supplier, DrCr.Credit, 4_321.09m, [Bill(BillAllocationKind.NewRef, "SUP/1")]));
+        await Post(VoucherBaseType.Payment, new(2026, 6, 30), (supplier, DrCr.Debit, 1_000m, [Bill(BillAllocationKind.AgstRef, "sup/1")]), (books.Bank, DrCr.Credit, 1_000m, null));
+        Assert.NotNull(s2.Number);
+        var report = await device.SyncAsync();
+        Assert.Equal((0, 0), (report.Conflicts, report.Rejected));
+
+        var api = await server.SignedInClientAsync(Owner);
+        foreach (var kind in new[] { OutstandingKind.Receivables, OutstandingKind.Payables })
+        {
+            foreach (var asAt in new[] { new DateOnly(2026, 4, 30), new DateOnly(2026, 6, 15), new DateOnly(2026, 12, 31) })
+            {
+                var onServer = await api.GetFromJsonAsync<OutstandingReport>($"/api/companies/{id}/reports/outstanding?kind={kind}&asAt={asAt:yyyy-MM-dd}", SyncJson.Options);
+                var onDevice = await device.RunAsync<BillWiseService, OutstandingReport>(s => s.OutstandingAsync(id, kind, asAt));
+                Assert.Equal(Json(onDevice), Json(onServer));
+                Assert.Equal(onServer!.Total, onServer.Ledgers.Sum(l => l.Balance));
+            }
+        }
+
+        var year = await device.RunAsync<BillWiseService, OutstandingReport>(s => s.OutstandingAsync(id, OutstandingKind.Receivables, new DateOnly(2026, 12, 31)));
+        Assert.Equal([("O-1", 400m), (s1.Number!, 900m), (s2.Number!, 0.05m), ("ADV-X", -200m)], year.Bills.OrderBy(b => b.BillDate).Select(b => (b.BillName, b.Pending)));
+    }
+
+    [Fact]
     public async Task PostgreSQL_schema_is_created_by_the_migration()
     {
         await using var server = new ApiServer();
@@ -168,6 +229,7 @@ public sealed class CrossProviderConsistencyTests(ITestOutputHelper output)
         var applied = await db.Database.GetAppliedMigrationsAsync();
         Assert.Contains(applied, m => m.EndsWith("_InitialServer", StringComparison.Ordinal));
         Assert.Contains(applied, m => m.EndsWith("_InventoryAndGst", StringComparison.Ordinal));
+        Assert.Contains(applied, m => m.EndsWith("_BillWise", StringComparison.Ordinal));
         Assert.Empty(await db.Database.GetPendingMigrationsAsync());
         Assert.Equal("Npgsql.EntityFrameworkCore.PostgreSQL", db.Database.ProviderName);
     }

@@ -27,6 +27,7 @@ public sealed class KeyboardShortcuts
         ("Alt+V", "Voucher register"),
         ("Alt+I", "Stock items"),
         ("Alt+K", "Stock Summary"),
+        ("Alt+O", "Outstanding receivables"),
         ("Ctrl+H", "Switch between accounting voucher and item invoice"),
         ("Alt+S", "Synchronization"),
         ("Alt+C", "Select company"),

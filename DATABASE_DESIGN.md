@@ -64,6 +64,7 @@ server that independently record "user U owns company C" create the same row.
 | `VoucherLines` | Id | (CompanyId, LedgerId, VoucherDate) for reports; unique (VoucherId, LineNo); AmountMinor > 0 + Side |
 | `VoucherNumberSeries` | Id | unique (CompanyId, VoucherTypeId, FinancialYearStart, SeriesCode); store-local, not replicated |
 | `VoucherItemLines` | Id | invoice lines: kind (stock/service), item, godown, ledger, `QuantityMilli` (qty × 1000), `RateScaled` (rate × 10,000), discount (milli-%), `TaxableMinor`, stock direction, taxability, GST/cess rate (milli-%), HSN/SAC, CGST/SGST-UTGST/IGST/cess minor; (CompanyId, StockItemId, VoucherDate) for valuation; (CompanyId, VoucherDate) for the GST summary; unique (VoucherId, LineNo) |
+| `VoucherBillAllocations` | Id | bill-wise breakup of voucher lines: line no., allocation no., ledger and side (from the line), kind (New Ref / Agst Ref / Advance / On Account), bill name + normalized name, due date, `AmountMinor`, voucher date, posted flag; (CompanyId, LedgerId, NormalizedBillName) for outstanding; unique (VoucherId, LineNo, AllocationNo) |
 | `Units` | Id | symbol, name, decimal places (0–3); unique (CompanyId, NormalizedSymbol) WHERE NOT IsDeleted |
 | `Godowns` | Id | unique (CompanyId, NormalizedName) WHERE NOT IsDeleted; one `IsSystem` "Main Location" per company |
 | `StockItems` | Id | unit, valuation method, opening quantity/value/godown, `GstRatesJson`; unique (CompanyId, NormalizedName) WHERE NOT IsDeleted |
@@ -78,6 +79,10 @@ Milestone 10 added (migration `InventoryAndGst` on both providers): `Companies.G
 with their owner) are stored as JSON **text** in one column on both providers; rates are integers in thousandths
 of a percent (18 % = 18000) so they are exact everywhere. Quantities and rates are scaled integers for the same
 reason. Stock values are not stored: they are recomputed from opening stock and posted item lines.
+
+The `BillWise` migration (both providers) added `VoucherBillAllocations` and `Ledgers.OpeningBillsJson` (opening
+bills as JSON text, like GST rates). Bills have no table of their own: a bill is the set of allocations (and opening
+bill) with the same ledger and normalized name, so outstanding amounts are always recomputed from postings.
 
 **Device-side difference:** in `LocalDbContext` the name (incl. unit symbol, godown and stock item names), voucher-number, idempotency-key and reversal indexes are
 declared **non-unique** (same columns and filters). The rules are still enforced by the application services for

@@ -188,13 +188,13 @@ public sealed class ChartOfAccountsService(IAccountingDbContext db, IAccessGuard
         var rows = await db.Ledgers.AsNoTracking()
             .Where(l => l.CompanyId == companyId && !l.IsDeleted)
             .OrderBy(l => l.NormalizedName)
-            .Select(l => new { l.Id, l.Name, l.Alias, l.GroupId })
+            .Select(l => new { l.Id, l.Name, l.Alias, l.GroupId, l.IsBillWise, l.CreditPeriodDays })
             .ToListAsync(cancellationToken);
 
         return rows.Select(l =>
         {
             var group = hierarchy.Get(l.GroupId);
-            return new LedgerLookupItem(l.Id, l.Name, l.Alias, l.GroupId, group.Name, group.Nature, hierarchy.TraitsOf(l.GroupId));
+            return new LedgerLookupItem(l.Id, l.Name, l.Alias, l.GroupId, group.Name, group.Nature, hierarchy.TraitsOf(l.GroupId), l.IsBillWise, l.CreditPeriodDays);
         }).ToList();
     }
 
@@ -332,7 +332,9 @@ public sealed class ChartOfAccountsService(IAccountingDbContext db, IAccessGuard
     private static LedgerDetails ToDetails(LedgerInput input) => new(
         input.Alias, input.IsBillWise, input.GstRegistrationType, input.Gstin, input.StateCode, input.Pan,
         input.AddressLine1, input.AddressLine2, input.City, input.Pincode, input.Email, input.Phone, input.CreditPeriodDays,
-        input.GstTaxType, input.GstRates.Select(r => r.ToEntry()).ToList());
+        input.GstTaxType, input.GstRates.Select(r => r.ToEntry()).ToList(),
+        input.OpeningBills.Select((b, i) => new OpeningBill(
+            b.Name, b.Date, b.DueDate, Amounts.Parse(b.Amount, $"OpeningBills[{i}].Amount").Minor, b.Side)).ToList());
 
     /// <summary>Only ledgers under Duties &amp; Taxes can accumulate a GST head.</summary>
     internal static void EnsureTaxTypeAllowed(GroupHierarchy hierarchy, AccountGroup group, GstTaxType taxType)
@@ -350,7 +352,8 @@ public sealed class ChartOfAccountsService(IAccountingDbContext db, IAccessGuard
             l.Id, l.Name, l.Alias, l.GroupId, group.Name, group.Nature, hierarchy.TraitsOf(l.GroupId),
             Amounts.ToDecimal(l.OpeningBalanceMinor), l.OpeningSide, l.IsBillWise, l.IsSystem, l.GstRegistrationType,
             l.Gstin, l.StateCode, l.Pan, l.AddressLine1, l.AddressLine2, l.City, l.Pincode, l.Email, l.Phone, l.CreditPeriodDays,
-            l.GstTaxType, l.GstRates, l.Version);
+            l.GstTaxType, l.GstRates, l.Version,
+            l.OpeningBills.Select(b => new OpeningBillDto(b.Name, b.Date, b.DueDate, Amounts.ToDecimal(b.AmountMinor), b.Side)).ToList());
     }
 
     private static AccountGroupDto ToDto(AccountGroup g, GroupHierarchy hierarchy, int depth, int ledgerCount)

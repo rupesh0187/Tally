@@ -44,6 +44,8 @@ public interface IAccountingDbContext
 
     DbSet<VoucherItemLine> VoucherItemLines { get; }
 
+    DbSet<VoucherBillAllocation> VoucherBillAllocations { get; }
+
     /// <summary>
     /// Starts a transaction that holds the company's write lock until it is committed or disposed.
     /// All writes for a company (including voucher-number allocation, version assignment and the audit

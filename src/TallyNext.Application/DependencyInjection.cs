@@ -2,6 +2,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using TallyNext.Application.Accounts;
 using TallyNext.Application.Audit;
+using TallyNext.Application.Bills;
 using TallyNext.Application.Common;
 using TallyNext.Application.Companies;
 using TallyNext.Application.Inventory;
@@ -34,6 +35,7 @@ public static class DependencyInjection
         services.AddScoped<InvoiceService>();
         services.AddScoped<StockValuationService>();
         services.AddScoped<ReportService>();
+        services.AddScoped<BillWiseService>();
         services.AddScoped<AuditService>();
         return services;
     }

@@ -53,7 +53,8 @@ public static class SnapshotMapper
     public static LedgerSnapshot ToSnapshot(Ledger l) => new(
         l.Id, l.CompanyId, l.Name, l.NormalizedName, l.Alias, l.GroupId, l.OpeningBalanceMinor, l.OpeningSide, l.IsBillWise,
         l.SystemKey, l.GstRegistrationType, l.Gstin, l.StateCode, l.Pan, l.AddressLine1, l.AddressLine2, l.City, l.Pincode,
-        l.Email, l.Phone, l.CreditPeriodDays, l.GstTaxType, l.GstRates, l.IsDeleted, l.CreatedAtUtc, l.UpdatedAtUtc, l.UpdatedByUserId);
+        l.Email, l.Phone, l.CreditPeriodDays, l.GstTaxType, l.GstRates, l.IsDeleted, l.CreatedAtUtc, l.UpdatedAtUtc, l.UpdatedByUserId,
+        l.OpeningBills);
 
     public static VoucherTypeSnapshot ToSnapshot(VoucherType t) => new(
         t.Id, t.CompanyId, t.Name, t.NormalizedName, t.BaseType, t.Abbreviation, t.IsSystem, t.IsActive, t.IsDeleted,
@@ -71,7 +72,10 @@ public static class SnapshotMapper
         v.ItemLines.OrderBy(l => l.LineNo).Select(l => new VoucherItemLineSnapshot(
             l.Id, l.LineNo, l.Kind, l.StockItemId, l.GodownId, l.LedgerId, l.Description, l.QuantityMilli, l.RateScaled,
             l.DiscountMilliPercent, l.TaxableMinor, l.Direction, l.Taxability, l.IgstMilliPercent, l.CessMilliPercent, l.HsnSac,
-            l.CgstMinor, l.StateTaxMinor, l.IgstMinor, l.CessMinor)).ToList());
+            l.CgstMinor, l.StateTaxMinor, l.IgstMinor, l.CessMinor)).ToList(),
+        v.BillAllocations.OrderBy(a => a.LineNo).ThenBy(a => a.AllocationNo)
+            .Select(a => new VoucherBillAllocationSnapshot(a.Id, a.LineNo, a.AllocationNo, a.Kind, a.BillName, a.DueDate, a.AmountMinor))
+            .ToList());
 
     public static UnitSnapshot ToSnapshot(UnitOfMeasure u) => new(
         u.Id, u.CompanyId, u.Symbol, u.NormalizedSymbol, u.Name, u.DecimalPlaces, u.IsDeleted, u.CreatedAtUtc, u.UpdatedAtUtc, u.UpdatedByUserId);

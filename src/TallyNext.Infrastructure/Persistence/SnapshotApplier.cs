@@ -24,7 +24,7 @@ public static class SnapshotApplier
         {
             CompanySnapshot s => await UpsertSimpleAsync<Company>(context, s.Id, s, version, cancellationToken),
             AccountGroupSnapshot s => await UpsertSimpleAsync<AccountGroup>(context, s.Id, s, version, cancellationToken),
-            LedgerSnapshot s => await UpsertSimpleAsync<Ledger>(context, s.Id, s, version, cancellationToken),
+            LedgerSnapshot s => await UpsertSimpleAsync<Ledger>(context, s.Id, s with { OpeningBills = s.OpeningBills ?? [] }, version, cancellationToken),
             VoucherTypeSnapshot s => await UpsertSimpleAsync<VoucherType>(context, s.Id, s, version, cancellationToken),
             UnitSnapshot s => await UpsertSimpleAsync<UnitOfMeasure>(context, s.Id, s, version, cancellationToken),
             GodownSnapshot s => await UpsertSimpleAsync<Godown>(context, s.Id, s, version, cancellationToken),
@@ -61,6 +61,7 @@ public static class SnapshotApplier
         var voucher = await context.Set<Voucher>()
             .Include(v => v.Lines)
             .Include(v => v.ItemLines)
+            .Include(v => v.BillAllocations)
             .SingleOrDefaultAsync(v => v.Id == snapshot.Id, cancellationToken);
         var isNew = voucher is null;
         if (voucher is null)
@@ -111,6 +112,39 @@ public static class SnapshotApplier
             foreach (var stale in existingItems.Values.Where(l => !incomingItemIds.Contains(l.Id)).ToList())
             {
                 context.Remove(stale);
+            }
+        }
+
+        var lineSides = snapshot.Lines.ToDictionary(l => l.LineNo, l => (l.LedgerId, l.Side));
+        var existingBills = voucher.BillAllocations.ToDictionary(a => a.Id);
+        var incomingBillIds = (snapshot.BillAllocations ?? []).Select(a => a.Id).ToHashSet();
+        if (!isNew)
+        {
+            foreach (var stale in existingBills.Values.Where(a => !incomingBillIds.Contains(a.Id)).ToList())
+            {
+                context.Remove(stale);
+            }
+        }
+
+        foreach (var billSnapshot in snapshot.BillAllocations ?? [])
+        {
+            var allocation = existingBills.GetValueOrDefault(billSnapshot.Id);
+            var allocationIsNew = allocation is null;
+            allocation ??= Create<VoucherBillAllocation>();
+            var entry = context.Entry(allocation);
+            entry.CurrentValues.SetValues(billSnapshot);
+            var (ledgerId, side) = lineSides[billSnapshot.LineNo];
+            var name = BillNames.Clean(billSnapshot.BillName);
+            entry.Property(nameof(VoucherBillAllocation.NormalizedBillName)).CurrentValue = name is null ? null : BillNames.Normalize(name);
+            entry.Property(nameof(VoucherBillAllocation.VoucherId)).CurrentValue = snapshot.Id;
+            entry.Property(nameof(VoucherBillAllocation.CompanyId)).CurrentValue = snapshot.CompanyId;
+            entry.Property(nameof(VoucherBillAllocation.LedgerId)).CurrentValue = ledgerId;
+            entry.Property(nameof(VoucherBillAllocation.Side)).CurrentValue = side;
+            entry.Property(nameof(VoucherBillAllocation.VoucherDate)).CurrentValue = snapshot.Date;
+            entry.Property(nameof(VoucherBillAllocation.IsPosted)).CurrentValue = isPosted;
+            if (allocationIsNew)
+            {
+                context.Add(allocation);
             }
         }
 

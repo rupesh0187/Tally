@@ -1,7 +1,7 @@
 // TallyNext keyboard shortcuts and focus helpers (ES module, imported via JS interop).
 const shortcuts = new Set([
   'F1', 'F4', 'F5', 'F6', 'F7', 'F8', 'F9', 'Alt+F5', 'Alt+F6',
-  'Alt+C', 'Alt+D', 'Alt+L', 'Alt+T', 'Alt+P', 'Alt+B', 'Alt+S', 'Alt+V', 'Alt+I', 'Alt+K',
+  'Alt+C', 'Alt+D', 'Alt+L', 'Alt+T', 'Alt+P', 'Alt+B', 'Alt+S', 'Alt+V', 'Alt+I', 'Alt+K', 'Alt+O',
   'Ctrl+S', 'Ctrl+Enter', 'Ctrl+H', 'Escape'
 ]);
 let listener = null;

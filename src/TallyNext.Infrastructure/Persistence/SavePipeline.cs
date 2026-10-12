@@ -36,6 +36,9 @@ public static class SavePipeline
         changedVoucherIds.UnionWith(tracker.Entries<VoucherItemLine>()
             .Where(e => e.State is EntityState.Added or EntityState.Modified or EntityState.Deleted)
             .Select(e => e.State == EntityState.Deleted ? (Guid)e.OriginalValues[nameof(VoucherItemLine.VoucherId)]! : e.Entity.VoucherId));
+        changedVoucherIds.UnionWith(tracker.Entries<VoucherBillAllocation>()
+            .Where(e => e.State is EntityState.Added or EntityState.Modified or EntityState.Deleted)
+            .Select(e => e.State == EntityState.Deleted ? (Guid)e.OriginalValues[nameof(VoucherBillAllocation.VoucherId)]! : e.Entity.VoucherId));
 
         var result = new List<PendingSyncChange>();
         foreach (var entry in tracker.Entries().ToList())

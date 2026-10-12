@@ -80,7 +80,8 @@ public sealed record LedgerSnapshot(
     bool IsDeleted,
     DateTime CreatedAtUtc,
     DateTime UpdatedAtUtc,
-    Guid? UpdatedByUserId);
+    Guid? UpdatedByUserId,
+    IReadOnlyList<OpeningBill>? OpeningBills = null);
 
 public sealed record VoucherTypeSnapshot(
     Guid Id,
@@ -133,7 +134,17 @@ public sealed record VoucherSnapshot(
     Guid? PartyLedgerId,
     string? PlaceOfSupplyStateCode,
     SupplyNature? SupplyNature,
-    IReadOnlyList<VoucherItemLineSnapshot> ItemLines);
+    IReadOnlyList<VoucherItemLineSnapshot> ItemLines,
+    IReadOnlyList<VoucherBillAllocationSnapshot>? BillAllocations = null);
+
+public sealed record VoucherBillAllocationSnapshot(
+    Guid Id,
+    int LineNo,
+    int AllocationNo,
+    BillAllocationKind Kind,
+    string? BillName,
+    DateOnly? DueDate,
+    long AmountMinor);
 
 public sealed record VoucherItemLineSnapshot(
     Guid Id,

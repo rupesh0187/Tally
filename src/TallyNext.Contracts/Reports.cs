@@ -1,4 +1,5 @@
 using TallyNext.Domain.Accounts;
+using TallyNext.Domain.Common;
 using TallyNext.Domain.Tax;
 using TallyNext.Domain.Vouchers;
 
@@ -151,3 +152,47 @@ public sealed record BalanceSheetReport(
     decimal OpeningDifference,
     decimal TotalLiabilities,
     decimal TotalAssets);
+
+public enum OutstandingKind : byte
+{
+    /// <summary>Bill-wise ledgers under asset groups (customers): amounts due to the company.</summary>
+    Receivables = 1,
+
+    /// <summary>Bill-wise ledgers under liability groups (suppliers): amounts the company owes.</summary>
+    Payables = 2,
+}
+
+/// <summary>
+/// One bill with a pending amount. Amounts are signed in the report's direction: positive = due to the company for
+/// receivables and owed by the company for payables; negative = the opposite (an advance or an over-settlement).
+/// </summary>
+/// <param name="OverdueDays">Days past the due date (or the bill date when there is none); negative = not yet due.</param>
+public sealed record OutstandingBill(
+    Guid LedgerId,
+    string LedgerName,
+    string BillName,
+    DateOnly BillDate,
+    DateOnly? DueDate,
+    decimal Original,
+    decimal Pending,
+    int OverdueDays,
+    bool IsAdvance);
+
+/// <param name="Balance">Ledger balance as at the report date = <paramref name="BillsPending"/> + <paramref name="OnAccount"/>.</param>
+public sealed record OutstandingLedger(Guid LedgerId, string LedgerName, string GroupName, decimal BillsPending, decimal OnAccount, decimal Balance);
+
+/// <summary>Pending bill amounts by age: not due, 0-30, 31-60, 61-90 and over 90 days past due.</summary>
+public sealed record AgeingBucket(string Label, decimal Amount);
+
+public sealed record OutstandingReport(
+    DateOnly AsAt,
+    OutstandingKind Kind,
+    IReadOnlyList<OutstandingBill> Bills,
+    IReadOnlyList<OutstandingLedger> Ledgers,
+    IReadOnlyList<AgeingBucket> Ageing,
+    decimal TotalBillsPending,
+    decimal TotalOnAccount,
+    decimal Total);
+
+/// <summary>A pending bill of one ledger, for choosing what a payment or receipt settles.</summary>
+public sealed record PendingBillDto(string BillName, DateOnly BillDate, DateOnly? DueDate, decimal Amount, DrCr Side);
