@@ -12,7 +12,13 @@
             <div class="voucher-type-badge">@(_type?.Name ?? "Voucher") <span class="muted small">@(EditId is null ? "new" : "draft")</span></div>
             <div class="muted small">@Hint</div>
         </div>
-        <div class="muted small">Enter = next field · Ctrl+S = save · Esc = back</div>
+        <div class="muted small">
+            Enter = next field · Ctrl+S = save · Esc = back
+            @if (EditId is null && _type is not null && IsInvoiceType(_type.BaseType))
+            {
+                <br /><a href="@($"invoices/new/{VoucherSlugs.Of(_type.BaseType)}")">Item invoice mode <kbd>Ctrl+H</kbd></a>
+            }
+        </div>
     </div>
 
     <Alerts Error="@Error" Notice="@Notice" />
@@ -227,8 +233,17 @@
             return true;
         }
 
+        if (key == "Ctrl+H" && EditId is null && _type is not null && IsInvoiceType(_type.BaseType))
+        {
+            Nav.NavigateTo($"invoices/new/{VoucherSlugs.Of(_type.BaseType)}");
+            return true;
+        }
+
         return false;
     }
+
+    private static bool IsInvoiceType(VoucherBaseType type) =>
+        type is VoucherBaseType.Sales or VoucherBaseType.Purchase or VoucherBaseType.CreditNote or VoucherBaseType.DebitNote;
 
     private static string LedgerId(int index) => $"l{index}-ledger";
 

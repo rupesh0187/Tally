@@ -8,6 +8,7 @@ using TallyNext.Contracts.Accounts;
 using TallyNext.Domain.Accounts;
 using TallyNext.Domain.Common;
 using TallyNext.Domain.Companies;
+using TallyNext.Domain.Tax;
 using TallyNext.Domain.Vouchers;
 
 namespace TallyNext.Application.Accounts;
@@ -233,6 +234,7 @@ public sealed class ChartOfAccountsService(IAccountingDbContext db, IAccessGuard
             throw new NotFoundException("group");
         }
 
+        EnsureTaxTypeAllowed(hierarchy, group, input.GstTaxType);
         var ledger = Ledger.Create(id, group, input.Name, opening, input.OpeningSide, ToDetails(input));
         await EnsureUniqueLedgerNameAsync(companyId, ledger.NormalizedName, ledger.Id, cancellationToken);
         db.Ledgers.Add(ledger);
@@ -260,6 +262,7 @@ public sealed class ChartOfAccountsService(IAccountingDbContext db, IAccessGuard
             throw new NotFoundException("group");
         }
 
+        EnsureTaxTypeAllowed(hierarchy, group, input.GstTaxType);
         var before = SnapshotMapper.ToSnapshot(ledger);
         ledger.Update(group, input.Name, opening, input.OpeningSide, ToDetails(input));
         await EnsureUniqueLedgerNameAsync(companyId, ledger.NormalizedName, ledger.Id, cancellationToken);
@@ -328,7 +331,17 @@ public sealed class ChartOfAccountsService(IAccountingDbContext db, IAccessGuard
 
     private static LedgerDetails ToDetails(LedgerInput input) => new(
         input.Alias, input.IsBillWise, input.GstRegistrationType, input.Gstin, input.StateCode, input.Pan,
-        input.AddressLine1, input.AddressLine2, input.City, input.Pincode, input.Email, input.Phone, input.CreditPeriodDays);
+        input.AddressLine1, input.AddressLine2, input.City, input.Pincode, input.Email, input.Phone, input.CreditPeriodDays,
+        input.GstTaxType, input.GstRates.Select(r => r.ToEntry()).ToList());
+
+    /// <summary>Only ledgers under Duties &amp; Taxes can accumulate a GST head.</summary>
+    internal static void EnsureTaxTypeAllowed(GroupHierarchy hierarchy, AccountGroup group, GstTaxType taxType)
+    {
+        if (taxType != GstTaxType.None && !hierarchy.HasAncestorWithKey(group.Id, SystemGroupKeys.DutiesAndTaxes))
+        {
+            throw new ValidationFailedException("ledger.gst_tax_type_group", "GST tax ledgers must be under Duties & Taxes.");
+        }
+    }
 
     internal static LedgerDto ToDto(Ledger l, GroupHierarchy hierarchy)
     {
@@ -336,7 +349,8 @@ public sealed class ChartOfAccountsService(IAccountingDbContext db, IAccessGuard
         return new LedgerDto(
             l.Id, l.Name, l.Alias, l.GroupId, group.Name, group.Nature, hierarchy.TraitsOf(l.GroupId),
             Amounts.ToDecimal(l.OpeningBalanceMinor), l.OpeningSide, l.IsBillWise, l.IsSystem, l.GstRegistrationType,
-            l.Gstin, l.StateCode, l.Pan, l.AddressLine1, l.AddressLine2, l.City, l.Pincode, l.Email, l.Phone, l.CreditPeriodDays, l.Version);
+            l.Gstin, l.StateCode, l.Pan, l.AddressLine1, l.AddressLine2, l.City, l.Pincode, l.Email, l.Phone, l.CreditPeriodDays,
+            l.GstTaxType, l.GstRates, l.Version);
     }
 
     private static AccountGroupDto ToDto(AccountGroup g, GroupHierarchy hierarchy, int depth, int ledgerCount)

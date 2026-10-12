@@ -7,6 +7,7 @@ using TallyNext.Contracts.Companies;
 using TallyNext.Domain.Accounts;
 using TallyNext.Domain.Common;
 using TallyNext.Domain.Companies;
+using TallyNext.Domain.Inventory;
 
 namespace TallyNext.Application.Companies;
 
@@ -77,6 +78,9 @@ public sealed class CompanyService(
         db.AccountGroups.AddRange(groups);
         db.Ledgers.AddRange(ledgers);
         db.VoucherTypes.AddRange(voucherTypes);
+        var (units, godowns) = DefaultInventory.Build(id);
+        db.Units.AddRange(units);
+        db.Godowns.AddRange(godowns);
 
         audit.Record(id, "company.created", "company", id, $"Company '{company.Name}' created", after: SnapshotMapper.ToSnapshot(company));
         await db.SaveChangesAsync(cancellationToken);
@@ -123,7 +127,8 @@ public sealed class CompanyService(
 
     internal static CompanyDto ToDto(Company c) => new(
         c.Id, c.Name, c.MailingName, c.AddressLine1, c.AddressLine2, c.City, c.StateCode, c.Pincode, c.Country, c.Gstin, c.Pan,
-        c.Email, c.Phone, c.CurrencyCode, c.CurrencySymbol, c.FinancialYearStartMonth, c.BooksBeginningDate, c.LockedThroughDate, c.Version);
+        c.Email, c.Phone, c.CurrencyCode, c.CurrencySymbol, c.FinancialYearStartMonth, c.BooksBeginningDate, c.LockedThroughDate,
+        c.GstRegistration, c.Version);
 
     private static CompanyProfile ToProfile(CompanyProfileInput input) => new(
         input.Name, input.MailingName, input.AddressLine1, input.AddressLine2, input.City, input.StateCode, input.Pincode,

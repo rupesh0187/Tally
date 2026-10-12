@@ -64,7 +64,7 @@ infrastructure (locking, change log vs. outbox, migrations). Domain remains pers
 ## Modular monolith
 
 The server is one deployable (API) plus the web front end sharing one database. Module boundaries are the
-application services (companies, chart of accounts, vouchers, reports, audit, sync). Nothing is distributed;
+application services (companies, chart of accounts, vouchers and invoices, inventory, GST, reports, audit, sync). Nothing is distributed;
 a module could later be extracted because it only reaches other modules through their services.
 
 ## Core flows
@@ -111,6 +111,21 @@ drift). Ledger-level aggregates are one grouped conditional-sum query over the
 `(CompanyId, LedgerId, VoucherDate)` index; group roll-ups are done in memory over per-ledger rows.
 `VoucherLines.VoucherDate` and `IsPosted` are denormalized from the voucher (they can only change while
 the voucher is a draft) to make that index covering.
+
+Inventory is valued by `StockValuationService`: per item, the opening stock plus posted item lines in date order
+are replayed through a weighted-average or FIFO cost flow (`Domain/Inventory/StockValuation.cs`). The trial
+balance adds an "Opening stock" row (stock at the start of the financial year) and moves the stock gain of earlier
+years into the Profit & Loss ledger's opening; the P&L trading account adds closing stock and subtracts opening
+stock; the balance sheet adds closing stock under Stock-in-Hand. Stock at books beginning is part of the opening
+balances. These adjustments keep every statement balanced (asserted by tests on both providers).
+
+### Invoices
+
+`InvoiceService` turns an invoice request (party, place of supply, item/service lines) into a voucher:
+`PlaceOfSupply` decides the supply type, `GstCalculator` computes tax per line and head, and `InvoiceBuilder`
+derives the accounting lines (party, sales/purchase ledgers aggregated, tax ledgers by head, optional round-off).
+The voucher stores both the item lines and the derived accounting lines; `VoucherPostingRules` re-derives the
+accounting lines from the item lines on every save, post and sync upload, so the two can never disagree.
 
 ## Hosting and configuration
 

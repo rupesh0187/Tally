@@ -198,11 +198,17 @@ public sealed class ConflictResolver(
 
         var referenced = entityType switch
         {
-            SyncEntityTypes.Ledger => await db.VoucherLines.AnyAsync(l => l.LedgerId == entityId && db.Vouchers.Any(v => v.Id == l.VoucherId && !v.IsDeleted), cancellationToken),
+            SyncEntityTypes.Ledger => await db.VoucherLines.AnyAsync(l => l.LedgerId == entityId && db.Vouchers.Any(v => v.Id == l.VoucherId && !v.IsDeleted), cancellationToken)
+                                      || await db.VoucherItemLines.AnyAsync(l => l.LedgerId == entityId && db.Vouchers.Any(v => v.Id == l.VoucherId && !v.IsDeleted), cancellationToken)
+                                      || await db.Vouchers.AnyAsync(v => v.PartyLedgerId == entityId && !v.IsDeleted, cancellationToken),
             SyncEntityTypes.AccountGroup => await db.Ledgers.AnyAsync(l => l.GroupId == entityId && !l.IsDeleted, cancellationToken)
                                             || await db.AccountGroups.AnyAsync(g => g.ParentGroupId == entityId && !g.IsDeleted, cancellationToken),
             SyncEntityTypes.VoucherType => await db.Vouchers.AnyAsync(v => v.VoucherTypeId == entityId && !v.IsDeleted, cancellationToken),
             SyncEntityTypes.Voucher => await db.Vouchers.AnyAsync(v => v.ReversalOfVoucherId == entityId && !v.IsDeleted, cancellationToken),
+            SyncEntityTypes.Unit => await db.StockItems.AnyAsync(i => i.UnitId == entityId && !i.IsDeleted, cancellationToken),
+            SyncEntityTypes.Godown => await db.StockItems.AnyAsync(i => i.OpeningGodownId == entityId && !i.IsDeleted, cancellationToken)
+                                      || await db.VoucherItemLines.AnyAsync(l => l.GodownId == entityId && db.Vouchers.Any(v => v.Id == l.VoucherId && !v.IsDeleted), cancellationToken),
+            SyncEntityTypes.StockItem => await db.VoucherItemLines.AnyAsync(l => l.StockItemId == entityId && db.Vouchers.Any(v => v.Id == l.VoucherId && !v.IsDeleted), cancellationToken),
             _ => true,
         };
         if (referenced)
@@ -217,6 +223,11 @@ public sealed class ConflictResolver(
             {
                 db.Entry(line).Property(nameof(Domain.Vouchers.VoucherLine.IsPosted)).CurrentValue = false;
             }
+
+            foreach (var line in voucher.ItemLines)
+            {
+                db.Entry(line).Property(nameof(Domain.Vouchers.VoucherItemLine.IsPosted)).CurrentValue = false;
+            }
         }
     }
 
@@ -226,7 +237,10 @@ public sealed class ConflictResolver(
         SyncEntityTypes.AccountGroup => await db.AccountGroups.SingleOrDefaultAsync(e => e.Id == entityId, cancellationToken),
         SyncEntityTypes.Ledger => await db.Ledgers.SingleOrDefaultAsync(e => e.Id == entityId, cancellationToken),
         SyncEntityTypes.VoucherType => await db.VoucherTypes.SingleOrDefaultAsync(e => e.Id == entityId, cancellationToken),
-        SyncEntityTypes.Voucher => await db.Vouchers.Include(v => v.Lines).SingleOrDefaultAsync(e => e.Id == entityId, cancellationToken),
+        SyncEntityTypes.Voucher => await db.Vouchers.Include(v => v.Lines).Include(v => v.ItemLines).SingleOrDefaultAsync(e => e.Id == entityId, cancellationToken),
+        SyncEntityTypes.Unit => await db.Units.SingleOrDefaultAsync(e => e.Id == entityId, cancellationToken),
+        SyncEntityTypes.Godown => await db.Godowns.SingleOrDefaultAsync(e => e.Id == entityId, cancellationToken),
+        SyncEntityTypes.StockItem => await db.StockItems.SingleOrDefaultAsync(e => e.Id == entityId, cancellationToken),
         _ => null,
     };
 }

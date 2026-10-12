@@ -1,5 +1,7 @@
 using TallyNext.Domain.Common;
 using TallyNext.Domain.Companies;
+using TallyNext.Domain.Inventory;
+using TallyNext.Domain.Tax;
 
 namespace TallyNext.Domain.Vouchers;
 
@@ -36,6 +38,7 @@ public sealed class Voucher : CompanyScopedEntity
     public const int MaxLines = 500;
 
     private readonly List<VoucherLine> _lines = [];
+    private readonly List<VoucherItemLine> _itemLines = [];
 
     private Voucher()
     {
@@ -82,6 +85,19 @@ public sealed class Voucher : CompanyScopedEntity
     public string? IdempotencyKey { get; private set; }
 
     public IReadOnlyList<VoucherLine> Lines => _lines;
+
+    /// <summary>Invoice item/service lines (empty for plain accounting vouchers).</summary>
+    public IReadOnlyList<VoucherItemLine> ItemLines => _itemLines;
+
+    /// <summary>Customer or supplier of an invoice; null for plain accounting vouchers.</summary>
+    public Guid? PartyLedgerId { get; private set; }
+
+    /// <summary>Place of supply (GST State code) used to determine <see cref="SupplyNature"/>.</summary>
+    public string? PlaceOfSupplyStateCode { get; private set; }
+
+    public SupplyNature? SupplyNature { get; private set; }
+
+    public bool IsInvoice => PartyLedgerId is not null;
 
     public bool IsReversal => ReversalOfVoucherId is not null;
 
@@ -184,6 +200,15 @@ public sealed class Voucher : CompanyScopedEntity
             .OrderBy(l => l.LineNo)
             .Select(l => new VoucherLineSpec(l.LedgerId, l.Side.Opposite(), l.Amount, l.Narration))
             .ToList());
+        if (original.IsInvoice)
+        {
+            // Same goods and tax with the stock movement turned around, so stock and GST registers net to zero.
+            reversal.PartyLedgerId = original.PartyLedgerId;
+            reversal.PlaceOfSupplyStateCode = original.PlaceOfSupplyStateCode;
+            reversal.SupplyNature = original.SupplyNature;
+            reversal.ReplaceItemLines(original.ItemLines.OrderBy(l => l.LineNo).Select(l => l.ToReversedSpec()).ToList());
+        }
+
         return reversal;
     }
 
@@ -198,6 +223,42 @@ public sealed class Voucher : CompanyScopedEntity
 
         SetHeader(company, date, header);
         SetLines(lines);
+    }
+
+    /// <summary>
+    /// Attaches invoice details to a draft: the party, the place of supply and the item/service lines from which the
+    /// accounting lines were built (see <see cref="InvoiceBuilder"/>). Stock lines must move in the direction of the
+    /// voucher type (out for Sales and Debit Note, in for Purchase and Credit Note).
+    /// </summary>
+    public void SetInvoiceDetails(Guid partyLedgerId, string? placeOfSupplyStateCode, SupplyNature nature, IReadOnlyCollection<VoucherItemLineSpec> itemLines)
+    {
+        ArgumentNullException.ThrowIfNull(itemLines);
+        EnsureDraft();
+        if (!InvoiceBuilder.IsInvoiceType(BaseType))
+        {
+            throw new DomainException("invoice.type_invalid", "Only Sales, Purchase, Credit Note and Debit Note vouchers carry invoice lines.");
+        }
+
+        if (!Enum.IsDefined(nature))
+        {
+            throw new DomainException("invoice.nature_invalid", "The supply type is not valid.");
+        }
+
+        if (placeOfSupplyStateCode is not null && !IndianStates.IsValidCode(placeOfSupplyStateCode))
+        {
+            throw new DomainException("invoice.place_of_supply_invalid", $"'{placeOfSupplyStateCode}' is not a valid GST State code.");
+        }
+
+        var expected = InvoiceBuilder.StockDirectionOf(BaseType);
+        if (itemLines.Any(l => l.Kind == InvoiceLineKind.Stock && l.Direction != expected))
+        {
+            throw new DomainException("invoice.stock_direction_invalid", "The stock movement does not match the voucher type.");
+        }
+
+        PartyLedgerId = partyLedgerId;
+        PlaceOfSupplyStateCode = placeOfSupplyStateCode;
+        SupplyNature = nature;
+        ReplaceItemLines(itemLines);
     }
 
     /// <summary>
@@ -224,6 +285,11 @@ public sealed class Voucher : CompanyScopedEntity
         foreach (var line in _lines)
         {
             line.MarkPosted();
+        }
+
+        foreach (var item in _itemLines)
+        {
+            item.MarkPosted();
         }
     }
 
@@ -280,6 +346,11 @@ public sealed class Voucher : CompanyScopedEntity
         {
             line.SetVoucherDate(date);
         }
+
+        foreach (var item in _itemLines)
+        {
+            item.SetVoucherDate(date);
+        }
     }
 
     private void SetLines(IReadOnlyCollection<VoucherLineSpec> lines)
@@ -327,6 +398,19 @@ public sealed class Voucher : CompanyScopedEntity
         _lines.Clear();
         _lines.AddRange(newLines);
         TotalMinor = debit;
+    }
+
+    private void ReplaceItemLines(IReadOnlyCollection<VoucherItemLineSpec> itemLines)
+    {
+        if (itemLines.Count > InvoiceBuilder.MaxLines)
+        {
+            throw new DomainException("invoice.too_many_lines", $"An invoice can have at most {InvoiceBuilder.MaxLines} lines.");
+        }
+
+        var lineNo = 0;
+        var created = itemLines.Select(spec => VoucherItemLine.Create(this, ++lineNo, spec)).ToList();
+        _itemLines.Clear();
+        _itemLines.AddRange(created);
     }
 
     private long SumSide(DrCr side)

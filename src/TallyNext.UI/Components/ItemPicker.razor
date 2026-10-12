@@ -1,0 +1,150 @@
+@* Type-to-search stock item selector: Up/Down to move, Enter to pick, Esc to close. *@
+<div class="picker" aria-expanded="@(_open ? "true" : "false")">
+    <input id="@Id"
+           class="input @(Invalid ? "invalid" : "")"
+           value="@_text"
+           placeholder="Type to search items…"
+           autocomplete="off"
+           role="combobox"
+           aria-autocomplete="list"
+           aria-label="@Label"
+           aria-controls="@($"{Id}-list")"
+           aria-activedescendant="@(_open && _results.Count > 0 ? $"{Id}-opt-{_highlight}" : null)"
+           data-next="@(Value is not null || !string.IsNullOrEmpty(_text) ? NextId : null)"
+           @oninput="OnInput"
+           @onkeydown="OnKeyDown"
+           @onfocus="OnFocus"
+           @onblur="OnBlur" />
+    @if (_open && _results.Count > 0)
+    {
+        <ul id="@($"{Id}-list")" class="picker-list" role="listbox">
+            @for (var i = 0; i < _results.Count; i++)
+            {
+                var index = i;
+                var item = _results[i];
+                <li id="@($"{Id}-opt-{index}")" role="option" aria-selected="@(index == _highlight ? "true" : "false")"
+                    class="@(index == _highlight ? "active" : "")"
+                    @onmousedown="() => SelectAsync(item)" @onmousedown:preventDefault>
+                    <span>@item.Name @if (!string.IsNullOrEmpty(item.Alias)) { <span class="muted small">(@item.Alias)</span> }</span>
+                    <span class="muted small">@item.UnitSymbol</span>
+                </li>
+            }
+        </ul>
+    }
+</div>
+
+@code {
+    private List<StockItemLookup> _results = [];
+    private string _text = string.Empty;
+    private bool _open;
+    private int _highlight;
+    private Guid? _shownId;
+
+    [Parameter, EditorRequired]
+    public string Id { get; set; } = string.Empty;
+
+    [Parameter, EditorRequired]
+    public IReadOnlyList<StockItemLookup> Items { get; set; } = [];
+
+    [Parameter]
+    public Guid? Value { get; set; }
+
+    [Parameter]
+    public EventCallback<Guid?> ValueChanged { get; set; }
+
+    /// <summary>Id of the element that receives focus when Enter is pressed (client-side, instant).</summary>
+    [Parameter]
+    public string? NextId { get; set; }
+
+    /// <summary>Raised when Enter is pressed on an empty picker (e.g. to finish entering lines).</summary>
+    [Parameter]
+    public EventCallback OnEmptyEnter { get; set; }
+
+    [Parameter]
+    public string Label { get; set; } = "Stock item";
+
+    [Parameter]
+    public bool Invalid { get; set; }
+
+    protected override void OnParametersSet()
+    {
+        if (Value != _shownId)
+        {
+            _shownId = Value;
+            _text = Value is { } id ? Items.FirstOrDefault(i => i.Id == id)?.Name ?? string.Empty : string.Empty;
+        }
+    }
+
+    private void OnFocus()
+    {
+        _results = StockItemCache.Search(Items, Value is null ? _text : null).ToList();
+        _highlight = 0;
+    }
+
+    private async Task OnInput(ChangeEventArgs e)
+    {
+        _text = e.Value?.ToString() ?? string.Empty;
+        _results = StockItemCache.Search(Items, _text).ToList();
+        _highlight = 0;
+        _open = true;
+        if (Value is not null)
+        {
+            _shownId = null;
+            await ValueChanged.InvokeAsync(null);
+        }
+    }
+
+    private async Task OnKeyDown(KeyboardEventArgs e)
+    {
+        switch (e.Key)
+        {
+            case "ArrowDown":
+                _open = true;
+                if (_results.Count == 0)
+                {
+                    _results = StockItemCache.Search(Items, _text).ToList();
+                }
+
+                _highlight = Math.Min(_highlight + 1, Math.Max(_results.Count - 1, 0));
+                break;
+            case "ArrowUp":
+                _highlight = Math.Max(_highlight - 1, 0);
+                break;
+            case "Enter":
+                if (_open && _results.Count > 0)
+                {
+                    await SelectAsync(_results[_highlight]);
+                }
+                else if (Value is null && string.IsNullOrEmpty(_text))
+                {
+                    await OnEmptyEnter.InvokeAsync();
+                }
+
+                break;
+            case "Escape":
+                _open = false;
+                break;
+        }
+    }
+
+    private void OnBlur()
+    {
+        _open = false;
+        if (Value is null && !string.IsNullOrWhiteSpace(_text))
+        {
+            var exact = Items.FirstOrDefault(i => string.Equals(i.Name, _text.Trim(), StringComparison.OrdinalIgnoreCase));
+            if (exact is not null)
+            {
+                _ = SelectAsync(exact);
+            }
+        }
+    }
+
+    private async Task SelectAsync(StockItemLookup item)
+    {
+        _text = item.Name;
+        _shownId = item.Id;
+        _open = false;
+        await ValueChanged.InvokeAsync(item.Id);
+    }
+}

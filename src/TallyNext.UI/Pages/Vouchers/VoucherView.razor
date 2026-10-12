@@ -27,7 +27,7 @@
         <div class="toolbar">
             @if (v.Status == VoucherStatus.Draft && State.Can(Permission.VoucherCreate))
             {
-                <a class="btn" href="@($"vouchers/{v.Id}/edit")">Edit draft</a>
+                <a class="btn" href="@(v.Invoice is null ? $"vouchers/{v.Id}/edit" : $"invoices/{v.Id}/edit")">Edit draft</a>
                 <button class="btn primary" disabled="@Busy" @onclick="PostAsync">Post</button>
                 <button class="btn danger" disabled="@Busy" @onclick="CancelAsync">Cancel draft</button>
             }
@@ -50,6 +50,40 @@
                 <button class="btn primary" disabled="@Busy" @onclick="ReverseAsync">Post reversal</button>
                 <button class="btn" @onclick="() => _reversing = false">Close</button>
             </div>
+        </div>
+    }
+
+    @if (v.Invoice is { } inv)
+    {
+        <div class="card" style="margin-bottom:1rem">
+            <div class="toolbar" style="justify-content:space-between">
+                <div><strong>@inv.PartyName</strong> <span class="muted small">· @SupplyLabel(inv)</span></div>
+                <div>Invoice total <strong>@Fmt.AmountOrZero(inv.GrandTotal)</strong>@if (inv.RoundOff != 0) { <span class="muted small"> (round off @(inv.RoundOff > 0 ? "+" : "−")@Fmt.AmountOrZero(Math.Abs(inv.RoundOff)))</span> }</div>
+            </div>
+            <table class="data" style="margin-top:.5rem">
+                <thead><tr><th>#</th><th>Item / service</th><th>Godown</th><th class="num">Qty</th><th class="num">Rate</th><th class="num">Disc %</th><th class="num">Taxable</th><th class="num">GST %</th><th>HSN/SAC</th><th class="num">Tax</th></tr></thead>
+                <tbody>
+                    @foreach (var l in inv.Lines)
+                    {
+                        <tr>
+                            <td>@l.LineNo</td>
+                            <td>@(l.ItemName ?? l.Description ?? l.LedgerName) @if (l.Direction != StockDirection.None) { <span class="muted small">(stock @(l.Direction == StockDirection.In ? "in" : "out"))</span> }<div class="muted small">@l.LedgerName</div></td>
+                            <td>@l.GodownName</td>
+                            <td class="num">@(l.Quantity == 0 ? "" : $"{l.Quantity:0.###} {l.UnitSymbol}")</td>
+                            <td class="num">@(l.Rate == 0 ? "" : l.Rate.ToString("#,##0.00##", CultureInfo.InvariantCulture))</td>
+                            <td class="num">@(l.DiscountPercent == 0 ? "" : l.DiscountPercent.ToString("0.###", CultureInfo.InvariantCulture))</td>
+                            <td class="num">@Fmt.AmountOrZero(l.Taxable)</td>
+                            <td class="num">@(l.Taxability == Taxability.Taxable ? l.GstPercent.ToString("0.###", CultureInfo.InvariantCulture) : l.Taxability.ToString())</td>
+                            <td class="mono">@l.HsnSac</td>
+                            <td class="num">@Fmt.Amount(l.Cgst + l.StateTax + l.Igst + l.Cess)</td>
+                        </tr>
+                    }
+                    <tr class="total">
+                        <td colspan="6">CGST @Fmt.AmountOrZero(inv.Cgst) · @(inv.SupplyNature == SupplyNature.IntraStateUnionTerritory ? "UTGST" : "SGST") @Fmt.AmountOrZero(inv.StateTax) · IGST @Fmt.AmountOrZero(inv.Igst)@(inv.Cess != 0 ? $" · Cess {Fmt.AmountOrZero(inv.Cess)}" : "")</td>
+                        <td class="num">@Fmt.AmountOrZero(inv.Taxable)</td><td colspan="2"></td><td class="num">@Fmt.AmountOrZero(inv.Cgst + inv.StateTax + inv.Igst + inv.Cess)</td>
+                    </tr>
+                </tbody>
+            </table>
         </div>
     }
 
@@ -82,6 +116,17 @@
 
 @code {
     private VoucherDto? _voucher;
+
+    private static string SupplyLabel(InvoiceDetailsDto invoice)
+    {
+        var nature = invoice.SupplyNature switch
+        {
+            SupplyNature.InterState => "inter-State (IGST)",
+            SupplyNature.IntraStateUnionTerritory => "within the UT (CGST + UTGST)",
+            _ => "within the State (CGST + SGST)",
+        };
+        return invoice.PlaceOfSupplyStateCode is { } pos ? $"{nature} · place of supply {pos}" : nature;
+    }
     private bool _reversing;
     private DateOnly _reverseDate;
     private string? _reverseNarration;

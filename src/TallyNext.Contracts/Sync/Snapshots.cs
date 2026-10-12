@@ -1,6 +1,8 @@
 using TallyNext.Domain.Accounts;
 using TallyNext.Domain.Common;
 using TallyNext.Domain.Companies;
+using TallyNext.Domain.Inventory;
+using TallyNext.Domain.Tax;
 using TallyNext.Domain.Vouchers;
 
 namespace TallyNext.Contracts.Sync;
@@ -29,6 +31,7 @@ public sealed record CompanySnapshot(
     int FinancialYearStartMonth,
     DateOnly BooksBeginningDate,
     DateOnly? LockedThroughDate,
+    GstRegistrationType GstRegistration,
     Guid CreatedByUserId,
     bool IsDeleted,
     DateTime CreatedAtUtc,
@@ -72,6 +75,8 @@ public sealed record LedgerSnapshot(
     string? Email,
     string? Phone,
     int? CreditPeriodDays,
+    GstTaxType GstTaxType,
+    IReadOnlyList<GstRateEntry> GstRates,
     bool IsDeleted,
     DateTime CreatedAtUtc,
     DateTime UpdatedAtUtc,
@@ -124,7 +129,74 @@ public sealed record VoucherSnapshot(
     DateTime CreatedAtUtc,
     DateTime UpdatedAtUtc,
     Guid? UpdatedByUserId,
-    IReadOnlyList<VoucherLineSnapshot> Lines);
+    IReadOnlyList<VoucherLineSnapshot> Lines,
+    Guid? PartyLedgerId,
+    string? PlaceOfSupplyStateCode,
+    SupplyNature? SupplyNature,
+    IReadOnlyList<VoucherItemLineSnapshot> ItemLines);
+
+public sealed record VoucherItemLineSnapshot(
+    Guid Id,
+    int LineNo,
+    InvoiceLineKind Kind,
+    Guid? StockItemId,
+    Guid? GodownId,
+    Guid LedgerId,
+    string? Description,
+    long QuantityMilli,
+    long RateScaled,
+    int DiscountMilliPercent,
+    long TaxableMinor,
+    StockDirection Direction,
+    Taxability Taxability,
+    int IgstMilliPercent,
+    int CessMilliPercent,
+    string? HsnSac,
+    long CgstMinor,
+    long StateTaxMinor,
+    long IgstMinor,
+    long CessMinor);
+
+public sealed record UnitSnapshot(
+    Guid Id,
+    Guid CompanyId,
+    string Symbol,
+    string NormalizedSymbol,
+    string Name,
+    int DecimalPlaces,
+    bool IsDeleted,
+    DateTime CreatedAtUtc,
+    DateTime UpdatedAtUtc,
+    Guid? UpdatedByUserId);
+
+public sealed record GodownSnapshot(
+    Guid Id,
+    Guid CompanyId,
+    string Name,
+    string NormalizedName,
+    bool IsSystem,
+    bool IsDeleted,
+    DateTime CreatedAtUtc,
+    DateTime UpdatedAtUtc,
+    Guid? UpdatedByUserId);
+
+public sealed record StockItemSnapshot(
+    Guid Id,
+    Guid CompanyId,
+    string Name,
+    string NormalizedName,
+    string? Alias,
+    string? PartNumber,
+    Guid UnitId,
+    ValuationMethod ValuationMethod,
+    IReadOnlyList<GstRateEntry> GstRates,
+    long OpeningQuantityMilli,
+    long OpeningValueMinor,
+    Guid? OpeningGodownId,
+    bool IsDeleted,
+    DateTime CreatedAtUtc,
+    DateTime UpdatedAtUtc,
+    Guid? UpdatedByUserId);
 
 public sealed record MembershipSnapshot(
     Guid Id,

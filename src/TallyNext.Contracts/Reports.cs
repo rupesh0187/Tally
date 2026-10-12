@@ -1,4 +1,5 @@
 using TallyNext.Domain.Accounts;
+using TallyNext.Domain.Tax;
 using TallyNext.Domain.Vouchers;
 
 namespace TallyNext.Contracts.Reports;
@@ -94,7 +95,44 @@ public sealed record ProfitAndLossReport(
     StatementSection IndirectIncomes,
     StatementSection IndirectExpenses,
     decimal NetProfit,
-    bool ExcludesInventory);
+    bool ExcludesInventory,
+    decimal OpeningStock = 0,
+    decimal ClosingStock = 0);
+
+public sealed record StockSummaryRow(
+    Guid StockItemId,
+    string Name,
+    string UnitSymbol,
+    decimal OpeningQuantity,
+    decimal OpeningValue,
+    decimal InwardQuantity,
+    decimal InwardValue,
+    decimal OutwardQuantity,
+    decimal OutwardCost,
+    decimal ClosingQuantity,
+    decimal ClosingValue,
+    bool WentNegative,
+    IReadOnlyList<GodownQuantity> ByGodown);
+
+public sealed record GodownQuantity(Guid GodownId, string GodownName, decimal Quantity);
+
+public sealed record StockSummaryReport(DateOnly From, DateOnly To, IReadOnlyList<StockSummaryRow> Rows, decimal TotalOpeningValue, decimal TotalClosingValue);
+
+/// <summary>One rate bucket of the GST summary. Amounts are net of credit/debit notes and reversals.</summary>
+public sealed record GstSummaryRow(Taxability Taxability, decimal GstPercent, SupplyNature SupplyNature, decimal Taxable, decimal Cgst, decimal StateTax, decimal Igst, decimal Cess);
+
+/// <summary>
+/// Period summary of outward supplies (sales less credit notes) and inward supplies (purchases less debit notes)
+/// with the tax on each. An aid for preparing returns; it is not itself a GST return.
+/// </summary>
+public sealed record GstSummaryReport(
+    DateOnly From,
+    DateOnly To,
+    IReadOnlyList<GstSummaryRow> Outward,
+    IReadOnlyList<GstSummaryRow> Inward,
+    decimal OutputTax,
+    decimal InputTax,
+    decimal NetPayable);
 
 /// <param name="ProfitAndLossBalance">
 /// Accumulated profit (positive) or loss (negative) through <see cref="AsAt"/>: the Profit &amp; Loss ledger's balance

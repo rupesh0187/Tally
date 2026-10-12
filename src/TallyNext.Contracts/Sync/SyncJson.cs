@@ -26,6 +26,9 @@ public static class SyncJson
         SyncEntityTypes.VoucherType => typeof(VoucherTypeSnapshot),
         SyncEntityTypes.Voucher => typeof(VoucherSnapshot),
         SyncEntityTypes.Membership => typeof(MembershipSnapshot),
+        SyncEntityTypes.Unit => typeof(UnitSnapshot),
+        SyncEntityTypes.Godown => typeof(GodownSnapshot),
+        SyncEntityTypes.StockItem => typeof(StockItemSnapshot),
         _ => throw new ArgumentOutOfRangeException(nameof(entityType), entityType, "Unknown entity type."),
     };
 

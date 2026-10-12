@@ -1,3 +1,4 @@
+using TallyNext.Domain.Accounts;
 using TallyNext.Domain.Companies;
 
 namespace TallyNext.Contracts.Companies;
@@ -31,7 +32,16 @@ public sealed record CompanyDto(
     int FinancialYearStartMonth,
     DateOnly BooksBeginningDate,
     DateOnly? LockedThroughDate,
+    GstRegistrationType GstRegistration,
     long Version);
+
+public sealed class SetGstRegistrationRequest
+{
+    public GstRegistrationType Registration { get; set; } = GstRegistrationType.Regular;
+
+    /// <summary>Also create the CGST, SGST, UTGST, IGST, Cess and Round Off ledgers when missing.</summary>
+    public bool CreateTaxLedgers { get; set; } = true;
+}
 
 /// <summary>Editable company details (form model).</summary>
 public class CompanyProfileInput

@@ -34,6 +34,9 @@
   permission receive 403.
 * Every query filters by `CompanyId`; entity lookups are by (CompanyId, Id). Cross-company references
   (e.g. a voucher line pointing at another company's ledger) are rejected by validation.
+* Inventory masters require `MasterEdit`; invoices require `VoucherCreate`; GST registration requires
+  `CompanyManage`. Uploaded invoices are re-derived by the server (values, tax, postings), so a modified client
+  cannot post tax or stock figures that do not follow from the invoice lines.
 * Input models are dedicated DTOs (no binding to entities → no mass assignment). All SQL is parameterized
   (EF LINQ or interpolated `ExecuteSqlAsync`, which parameterizes).
 

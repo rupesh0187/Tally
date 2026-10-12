@@ -2,6 +2,7 @@ using Microsoft.EntityFrameworkCore;
 using TallyNext.Domain.Accounts;
 using TallyNext.Domain.Audit;
 using TallyNext.Domain.Companies;
+using TallyNext.Domain.Inventory;
 using TallyNext.Domain.Vouchers;
 
 namespace TallyNext.Application.Abstractions;
@@ -34,6 +35,14 @@ public interface IAccountingDbContext
     DbSet<VoucherNumberSeries> VoucherNumberSeries { get; }
 
     DbSet<AuditEntry> AuditEntries { get; }
+
+    DbSet<UnitOfMeasure> Units { get; }
+
+    DbSet<Godown> Godowns { get; }
+
+    DbSet<StockItem> StockItems { get; }
+
+    DbSet<VoucherItemLine> VoucherItemLines { get; }
 
     /// <summary>
     /// Starts a transaction that holds the company's write lock until it is committed or disposed.

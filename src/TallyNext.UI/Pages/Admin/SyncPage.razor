@@ -3,6 +3,7 @@
 @inject IServiceProvider Services
 @inject IHostFeatures Host
 @inject LedgerCache LedgerCache
+@inject StockItemCache ItemCache
 
 <PageTitle>Synchronization — TallyNext</PageTitle>
 
@@ -121,6 +122,7 @@ else
         if (_sync is not null && await RunAsync(_sync.SyncNowAsync))
         {
             LedgerCache.Invalidate();
+            ItemCache.Invalidate();
             Notice = "Synchronization finished.";
             await LoadAsync();
         }
@@ -131,6 +133,7 @@ else
         if (_sync is not null && await RunAsync(() => _sync.ResolveAsync(State.CompanyId, issue.Id, keepServer)))
         {
             LedgerCache.Invalidate();
+            ItemCache.Invalidate();
             Notice = keepServer ? "The server version was kept." : "Your version will be uploaded again.";
             await LoadAsync();
         }

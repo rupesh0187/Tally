@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using TallyNext.Application.Abstractions;
 using TallyNext.Application.Common;
+using TallyNext.Application.Inventory;
 using TallyNext.Application.Security;
 using TallyNext.Application.Vouchers;
 using TallyNext.Contracts;
@@ -8,6 +9,8 @@ using TallyNext.Contracts.Reports;
 using TallyNext.Domain.Accounts;
 using TallyNext.Domain.Common;
 using TallyNext.Domain.Companies;
+using TallyNext.Domain.Inventory;
+using TallyNext.Domain.Tax;
 using TallyNext.Domain.Vouchers;
 
 namespace TallyNext.Application.Reports;
@@ -25,7 +28,7 @@ namespace TallyNext.Application.Reports;
 /// <para>All aggregation happens in the database with grouped conditional sums over the index
 /// (CompanyId, LedgerId, VoucherDate); only per-ledger totals (one row per ledger) come back to memory.</para>
 /// </remarks>
-public sealed class ReportService(IAccountingDbContext db, IAccessGuard guard)
+public sealed class ReportService(IAccountingDbContext db, IAccessGuard guard, StockValuationService stockValuation)
 {
     // ------------------------------------------------------------------ Day Book
 
@@ -160,8 +163,22 @@ public sealed class ReportService(IAccountingDbContext db, IAccessGuard guard)
         EnsureRange(from, to);
         var books = await LoadBooksAsync(companyId, from, to, cancellationToken);
 
+        // Inventory (periodic method): the trial balance shows the stock at the start of the financial year as
+        // "Opening stock"; the change in stock during earlier years is part of the profit carried into the
+        // Profit & Loss ledger, and stock at books beginning is part of the opening balances.
+        var fyStart = (await LoadCompanyAsync(companyId, cancellationToken)).FinancialYearOf(from).Start;
+        var stock = await stockValuation.TotalsAsync(companyId, fyStart, to, cancellationToken);
+        var openingStock = stock.OpeningAtFromMinor;
+        var priorStockChange = stock.OpeningAtFromMinor - stock.BooksOpeningMinor;
+        var profitLedger = books.Ledgers.Values.FirstOrDefault(l => l.SystemKey == SystemLedgerKeys.ProfitAndLoss);
+        if (profitLedger is not null && priorStockChange != 0)
+        {
+            books.Ledgers[profitLedger.Id] = profitLedger with { Opening = profitLedger.Opening - priorStockChange };
+        }
+
         var rows = new List<TrialBalanceRow>();
-        long totalOpeningDr = 0, totalOpeningCr = 0, totalDr = 0, totalCr = 0, totalClosingDr = 0, totalClosingCr = 0, openingDifference = 0;
+        long totalOpeningDr = Math.Max(openingStock, 0), totalOpeningCr = Math.Max(-openingStock, 0), totalDr = 0, totalCr = 0;
+        long totalClosingDr = Math.Max(openingStock, 0), totalClosingCr = Math.Max(-openingStock, 0), openingDifference = stock.BooksOpeningMinor;
         foreach (var l in books.Ledgers.Values)
         {
             openingDifference += l.SignedOpeningMinor;
@@ -201,6 +218,13 @@ public sealed class ReportService(IAccountingDbContext db, IAccessGuard guard)
                 {
                     childRows.Add(Row(l.Id, l.Name, false, group.Id, depth + 1, group.Nature, l.Opening, l.PeriodDebit, l.PeriodCredit, l.Closing));
                 }
+            }
+
+            if (group.SystemKey == SystemGroupKeys.StockInHand && openingStock != 0)
+            {
+                opening += openingStock;
+                closing += openingStock;
+                childRows.Add(Row(Guid.Empty, "Opening stock", false, group.Id, depth + 1, group.Nature, openingStock, 0, 0, openingStock));
             }
 
             var rowsOut = new List<TrialBalanceRow>(childRows.Count + 1);
@@ -258,13 +282,17 @@ public sealed class ReportService(IAccountingDbContext db, IAccessGuard guard)
         var indirectIncomes = BuildSection("Indirect incomes", books, primaries.Where(g => g.Nature == AccountNature.Income && !g.AffectsGrossProfit), amounts);
         var indirectExpenses = BuildSection("Indirect expenses", books, primaries.Where(g => g.Nature == AccountNature.Expense && !g.AffectsGrossProfit), amounts);
 
-        var gross = tradingIncome.Total - directCosts.Total;
+        // Trading account: gross profit = sales + direct incomes + closing stock - opening stock - purchases - direct expenses.
+        var stock = await stockValuation.TotalsAsync(companyId, from, to, cancellationToken);
+        var gross = tradingIncome.Total - directCosts.Total + stock.ClosingAtToMinor - stock.OpeningAtFromMinor;
         var net = gross + indirectIncomes.Total - indirectExpenses.Total;
         return new ProfitAndLossReport(
             from, to,
             ToSection(tradingIncome), ToSection(directCosts), Amounts.ToDecimal(gross),
             ToSection(indirectIncomes), ToSection(indirectExpenses), Amounts.ToDecimal(net),
-            ExcludesInventory: true);
+            ExcludesInventory: false,
+            OpeningStock: Amounts.ToDecimal(stock.OpeningAtFromMinor),
+            ClosingStock: Amounts.ToDecimal(stock.ClosingAtToMinor));
     }
 
     // ------------------------------------------------------------------ Balance sheet
@@ -299,9 +327,20 @@ public sealed class ReportService(IAccountingDbContext db, IAccessGuard guard)
             balanceSheetAmounts[l.Id] = l.Nature == AccountNature.Liability ? -lifetimeSigned : lifetimeSigned;
         }
 
+        // Closing stock is an asset; the change in stock since books beginning is profit (this year's part since the
+        // start of the financial year); stock at books beginning is part of the opening balances.
+        var stock = await stockValuation.TotalsAsync(companyId, fyStart, asAt, cancellationToken);
+        netProfitToDate += stock.ClosingAtToMinor - stock.BooksOpeningMinor;
+        currentPeriodProfit += stock.ClosingAtToMinor - stock.OpeningAtFromMinor;
+        openingDifference += stock.BooksOpeningMinor;
+        var stockGroup = books.Hierarchy.All.FirstOrDefault(g => g.SystemKey == SystemGroupKeys.StockInHand && !g.IsDeleted);
+        var synthetic = stockGroup is not null && stock.ClosingAtToMinor != 0
+            ? new Dictionary<Guid, (string Name, long Amount)> { [stockGroup.Id] = ("Closing stock", stock.ClosingAtToMinor) }
+            : null;
+
         var primaries = books.Hierarchy.All.Where(g => g.IsPrimary && !g.IsDeleted).ToList();
         var liabilities = BuildSection("Liabilities", books, primaries.Where(g => g.Nature == AccountNature.Liability), balanceSheetAmounts);
-        var assets = BuildSection("Assets", books, primaries.Where(g => g.Nature == AccountNature.Asset), balanceSheetAmounts);
+        var assets = BuildSection("Assets", books, primaries.Where(g => g.Nature == AccountNature.Asset), balanceSheetAmounts, synthetic);
 
         var liabilityLines = liabilities.Lines.ToList();
         var accumulated = checked(profitLedgerBalance + netProfitToDate);
@@ -332,6 +371,130 @@ public sealed class ReportService(IAccountingDbContext db, IAccessGuard guard)
             Amounts.ToDecimal(openingDifference),
             Amounts.ToDecimal(totalLiabilities),
             Amounts.ToDecimal(totalAssets));
+    }
+
+    // ------------------------------------------------------------------ Inventory and GST
+
+    /// <summary>Quantity and value per stock item: opening at <paramref name="from"/>, inwards, outwards at cost, closing at <paramref name="to"/>.</summary>
+    public async Task<StockSummaryReport> StockSummaryAsync(Guid companyId, DateOnly from, DateOnly to, CancellationToken cancellationToken = default)
+    {
+        await guard.RequireAsync(companyId, Permission.ReportView, cancellationToken);
+        EnsureRange(from, to);
+        var valuations = await stockValuation.ValueAsync(companyId, from, to, cancellationToken);
+        var items = await db.StockItems.AsNoTracking()
+            .Where(i => i.CompanyId == companyId && !i.IsDeleted)
+            .Select(i => new { i.Id, i.Name, i.UnitId })
+            .ToDictionaryAsync(i => i.Id, cancellationToken);
+        var units = await db.Units.AsNoTracking().Where(u => u.CompanyId == companyId).ToDictionaryAsync(u => u.Id, u => u.Symbol, cancellationToken);
+        var godowns = await db.Godowns.AsNoTracking().Where(g => g.CompanyId == companyId).ToDictionaryAsync(g => g.Id, g => g.Name, cancellationToken);
+
+        var rows = valuations
+            .Where(v => items.ContainsKey(v.StockItemId))
+            .Select(v =>
+            {
+                var item = items[v.StockItemId];
+                var r = v.Result;
+                var byGodown = v.ClosingQuantityByGodown
+                    .Where(g => g.Value != 0)
+                    .Select(g => new GodownQuantity(g.Key, godowns.GetValueOrDefault(g.Key, "(unknown godown)"), StockMath.ToQuantity(g.Value)))
+                    .OrderBy(g => g.GodownName, StringComparer.OrdinalIgnoreCase)
+                    .ToList();
+                return new StockSummaryRow(
+                    item.Id, item.Name, units.GetValueOrDefault(item.UnitId, ""),
+                    StockMath.ToQuantity(r.Opening.QuantityMilli), Amounts.ToDecimal(r.Opening.ValueMinor),
+                    StockMath.ToQuantity(r.InwardQuantityMilli), Amounts.ToDecimal(r.InwardValueMinor),
+                    StockMath.ToQuantity(r.OutwardQuantityMilli), Amounts.ToDecimal(r.OutwardCostMinor),
+                    StockMath.ToQuantity(r.Closing.QuantityMilli), Amounts.ToDecimal(r.Closing.ValueMinor),
+                    r.WentNegative, byGodown);
+            })
+            .OrderBy(r => r.Name, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        return new StockSummaryReport(
+            from, to, rows,
+            Amounts.ToDecimal(valuations.Sum(v => v.Result.Opening.ValueMinor)),
+            Amounts.ToDecimal(valuations.Sum(v => v.Result.Closing.ValueMinor)));
+    }
+
+    /// <summary>
+    /// Taxable value and tax per rate for outward supplies (sales less credit notes) and inward supplies (purchases
+    /// less debit notes) of posted invoices dated in the period; reversals net off the vouchers they reverse.
+    /// </summary>
+    public async Task<GstSummaryReport> GstSummaryAsync(Guid companyId, DateOnly from, DateOnly to, CancellationToken cancellationToken = default)
+    {
+        await guard.RequireAsync(companyId, Permission.ReportView, cancellationToken);
+        EnsureRange(from, to);
+        var buckets = await (
+                from l in db.VoucherItemLines.AsNoTracking()
+                join v in db.Vouchers.AsNoTracking() on l.VoucherId equals v.Id
+                where l.CompanyId == companyId && l.IsPosted && l.VoucherDate >= @from && l.VoucherDate <= to && v.SupplyNature != null
+                group l by new { v.BaseType, IsReversal = v.ReversalOfVoucherId != null, Nature = v.SupplyNature!.Value, l.Taxability, l.IgstMilliPercent } into g
+                select new
+                {
+                    g.Key.BaseType,
+                    g.Key.IsReversal,
+                    g.Key.Nature,
+                    g.Key.Taxability,
+                    g.Key.IgstMilliPercent,
+                    Taxable = g.Sum(x => x.TaxableMinor),
+                    Cgst = g.Sum(x => x.CgstMinor),
+                    StateTax = g.Sum(x => x.StateTaxMinor),
+                    Igst = g.Sum(x => x.IgstMinor),
+                    Cess = g.Sum(x => x.CessMinor),
+                })
+            .ToListAsync(cancellationToken);
+
+        var outward = new Dictionary<(Taxability, int, SupplyNature), long[]>();
+        var inward = new Dictionary<(Taxability, int, SupplyNature), long[]>();
+        foreach (var b in buckets)
+        {
+            var (target, sign) = b.BaseType switch
+            {
+                VoucherBaseType.Sales => (outward, 1),
+                VoucherBaseType.CreditNote => (outward, -1),
+                VoucherBaseType.Purchase => (inward, 1),
+                VoucherBaseType.DebitNote => (inward, -1),
+                _ => (null, 0),
+            };
+            if (target is null)
+            {
+                continue;
+            }
+
+            if (b.IsReversal)
+            {
+                sign = -sign;
+            }
+
+            var key = (b.Taxability, b.IgstMilliPercent, b.Nature);
+            if (!target.TryGetValue(key, out var sums))
+            {
+                target[key] = sums = new long[5];
+            }
+
+            sums[0] += sign * b.Taxable;
+            sums[1] += sign * b.Cgst;
+            sums[2] += sign * b.StateTax;
+            sums[3] += sign * b.Igst;
+            sums[4] += sign * b.Cess;
+        }
+
+        static List<GstSummaryRow> ToRows(Dictionary<(Taxability, int, SupplyNature), long[]> source) => source
+            .Where(kv => kv.Value.Any(x => x != 0))
+            .OrderBy(kv => kv.Key.Item1).ThenBy(kv => kv.Key.Item2).ThenBy(kv => kv.Key.Item3)
+            .Select(kv => new GstSummaryRow(
+                kv.Key.Item1, kv.Key.Item2 / 1000m, kv.Key.Item3,
+                Amounts.ToDecimal(kv.Value[0]), Amounts.ToDecimal(kv.Value[1]), Amounts.ToDecimal(kv.Value[2]),
+                Amounts.ToDecimal(kv.Value[3]), Amounts.ToDecimal(kv.Value[4])))
+            .ToList();
+
+        static long Tax(Dictionary<(Taxability, int, SupplyNature), long[]> source) => source.Values.Sum(v => v[1] + v[2] + v[3] + v[4]);
+
+        var outputTax = Tax(outward);
+        var inputTax = Tax(inward);
+        return new GstSummaryReport(
+            from, to, ToRows(outward), ToRows(inward),
+            Amounts.ToDecimal(outputTax), Amounts.ToDecimal(inputTax), Amounts.ToDecimal(outputTax - inputTax));
     }
 
     // ------------------------------------------------------------------ shared computation
@@ -417,7 +580,12 @@ public sealed class ReportService(IAccountingDbContext db, IAccessGuard guard)
         return new Books(hierarchy, result);
     }
 
-    private static Section BuildSection(string title, Books books, IEnumerable<AccountGroup> primaries, IReadOnlyDictionary<Guid, long> amounts)
+    private static Section BuildSection(
+        string title,
+        Books books,
+        IEnumerable<AccountGroup> primaries,
+        IReadOnlyDictionary<Guid, long> amounts,
+        IReadOnlyDictionary<Guid, (string Name, long Amount)>? synthetic = null)
     {
         var children = books.Hierarchy.All.Where(g => !g.IsDeleted).ToLookup(g => g.ParentGroupId);
         var ledgersByGroup = books.Ledgers.Values.Where(l => amounts.ContainsKey(l.Id)).ToLookup(l => l.GroupId);
@@ -443,6 +611,12 @@ public sealed class ReportService(IAccountingDbContext db, IAccessGuard guard)
                 {
                     inner.Add(new StatementLine(l.Name, null, l.Id, depth + 1, Amounts.ToDecimal(amount)));
                 }
+            }
+
+            if (synthetic is not null && synthetic.TryGetValue(group.Id, out var extra) && extra.Amount != 0)
+            {
+                subtotal += extra.Amount;
+                inner.Add(new StatementLine(extra.Name, null, null, depth + 1, Amounts.ToDecimal(extra.Amount)));
             }
 
             if (subtotal == 0 && inner.Count == 0)

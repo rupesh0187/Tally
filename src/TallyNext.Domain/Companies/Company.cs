@@ -1,3 +1,4 @@
+using TallyNext.Domain.Accounts;
 using TallyNext.Domain.Common;
 
 namespace TallyNext.Domain.Companies;
@@ -84,6 +85,14 @@ public sealed class Company : ISyncEntity
     /// <summary>Vouchers dated on or before this date can no longer be posted or reversed.</summary>
     public DateOnly? LockedThroughDate { get; private set; }
 
+    /// <summary>
+    /// GST registration of the company. Only <see cref="Accounts.GstRegistrationType.Regular"/> charges GST on
+    /// invoices; composition dealers bill without tax; NotApplicable disables GST features.
+    /// </summary>
+    public GstRegistrationType GstRegistration { get; private set; }
+
+    public bool ChargesGst => GstRegistration == GstRegistrationType.Regular;
+
     public bool IsIndian => string.Equals(Country, "India", StringComparison.OrdinalIgnoreCase);
 
     public static Company Create(
@@ -161,6 +170,11 @@ public sealed class Company : ISyncEntity
             }
         }
 
+        if (gstin is null && GstRegistration != GstRegistrationType.NotApplicable)
+        {
+            throw new DomainException("company.gstin_required", "A GST-registered company must keep its GSTIN.");
+        }
+
         var pan = NameRules.CleanOptional(profile.Pan, 10, "pan")?.ToUpperInvariant();
         if (pan is not null && !Companies.Pan.IsValid(pan))
         {
@@ -190,6 +204,22 @@ public sealed class Company : ISyncEntity
         Pan = pan ?? (gstin is not null ? Companies.Gstin.PanOf(gstin) : null);
         Email = NameRules.CleanOptional(profile.Email, 254, "email");
         Phone = NameRules.CleanOptional(profile.Phone, 30, "phone");
+    }
+
+    public void SetGstRegistration(GstRegistrationType registration)
+    {
+        EnsureNotDeleted();
+        if (registration is not (GstRegistrationType.NotApplicable or GstRegistrationType.Regular or GstRegistrationType.Composition))
+        {
+            throw new DomainException("company.gst_registration_invalid", "A company is either not registered, a regular taxpayer or a composition dealer.");
+        }
+
+        if (registration != GstRegistrationType.NotApplicable && (Gstin is null || StateCode is null))
+        {
+            throw new DomainException("company.gstin_required", "Enter the company's GSTIN before enabling GST.");
+        }
+
+        GstRegistration = registration;
     }
 
     public CompanyProfile GetProfile() => new(

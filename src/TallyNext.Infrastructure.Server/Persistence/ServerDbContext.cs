@@ -8,6 +8,7 @@ using TallyNext.Contracts.Sync;
 using TallyNext.Domain.Accounts;
 using TallyNext.Domain.Audit;
 using TallyNext.Domain.Companies;
+using TallyNext.Domain.Inventory;
 using TallyNext.Domain.Vouchers;
 using TallyNext.Infrastructure.Persistence;
 
@@ -54,6 +55,14 @@ public sealed class ServerDbContext : IdentityDbContext<AppUser, IdentityRole<Gu
     public DbSet<Voucher> Vouchers => Set<Voucher>();
 
     public DbSet<VoucherLine> VoucherLines => Set<VoucherLine>();
+
+    public DbSet<VoucherItemLine> VoucherItemLines => Set<VoucherItemLine>();
+
+    public DbSet<UnitOfMeasure> Units => Set<UnitOfMeasure>();
+
+    public DbSet<Godown> Godowns => Set<Godown>();
+
+    public DbSet<StockItem> StockItems => Set<StockItem>();
 
     public DbSet<VoucherNumberSeries> VoucherNumberSeries => Set<VoucherNumberSeries>();
 

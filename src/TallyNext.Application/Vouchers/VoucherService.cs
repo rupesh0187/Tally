@@ -7,6 +7,7 @@ using TallyNext.Contracts;
 using TallyNext.Contracts.Vouchers;
 using TallyNext.Domain.Common;
 using TallyNext.Domain.Companies;
+using TallyNext.Domain.Inventory;
 using TallyNext.Domain.Vouchers;
 
 namespace TallyNext.Application.Vouchers;
@@ -98,6 +99,11 @@ public sealed class VoucherService(
         if (input.ExpectedVersion is { } expected && expected != voucher.Version)
         {
             throw new ConflictException("voucher.version_conflict", "The voucher was changed by someone else. Reload and try again.", voucher.Version);
+        }
+
+        if (voucher.IsInvoice)
+        {
+            throw new ValidationFailedException("voucher.is_invoice", "This draft is an invoice; edit it in the invoice screen.");
         }
 
         if (input.VoucherTypeId != Guid.Empty && input.VoucherTypeId != voucher.VoucherTypeId)
@@ -193,10 +199,15 @@ public sealed class VoucherService(
         await guard.RequireAsync(companyId, Permission.VoucherView, cancellationToken);
         var voucher = await db.Vouchers.AsNoTracking()
             .Include(v => v.Lines)
+            .Include(v => v.ItemLines)
             .SingleOrDefaultAsync(v => v.CompanyId == companyId && v.Id == voucherId && !v.IsDeleted, cancellationToken)
             ?? throw new NotFoundException("voucher");
 
-        var ledgerIds = voucher.Lines.Select(l => l.LedgerId).Distinct().ToList();
+        var ledgerIds = voucher.Lines.Select(l => l.LedgerId)
+            .Concat(voucher.ItemLines.Select(l => l.LedgerId))
+            .Concat(voucher.PartyLedgerId is { } partyId ? [partyId] : [])
+            .Distinct()
+            .ToList();
         var ledgerNames = await db.Ledgers.AsNoTracking()
             .Where(l => l.CompanyId == companyId && ledgerIds.Contains(l.Id))
             .ToDictionaryAsync(l => l.Id, l => l.Name, cancellationToken);
@@ -235,7 +246,54 @@ public sealed class VoucherService(
             voucher.CreatedOnDeviceId,
             voucher.CreatedAtUtc,
             voucher.PostedAtUtc,
-            voucher.Version);
+            voucher.Version,
+            await InvoiceDetailsAsync(companyId, voucher, ledgerNames, cancellationToken));
+    }
+
+    private async Task<InvoiceDetailsDto?> InvoiceDetailsAsync(Guid companyId, Voucher voucher, IReadOnlyDictionary<Guid, string> ledgerNames, CancellationToken cancellationToken)
+    {
+        if (!voucher.IsInvoice || voucher.SupplyNature is not { } nature)
+        {
+            return null;
+        }
+
+        var itemIds = voucher.ItemLines.Where(l => l.StockItemId is not null).Select(l => l.StockItemId!.Value).Distinct().ToList();
+        var godownIds = voucher.ItemLines.Where(l => l.GodownId is not null).Select(l => l.GodownId!.Value).Distinct().ToList();
+        var items = await db.StockItems.AsNoTracking()
+            .Where(i => i.CompanyId == companyId && itemIds.Contains(i.Id))
+            .Select(i => new { i.Id, i.Name, i.UnitId })
+            .ToDictionaryAsync(i => i.Id, cancellationToken);
+        var unitIds = items.Values.Select(i => i.UnitId).Distinct().ToList();
+        var units = await db.Units.AsNoTracking().Where(u => unitIds.Contains(u.Id)).ToDictionaryAsync(u => u.Id, u => u.Symbol, cancellationToken);
+        var godowns = await db.Godowns.AsNoTracking().Where(g => g.CompanyId == companyId && godownIds.Contains(g.Id)).ToDictionaryAsync(g => g.Id, g => g.Name, cancellationToken);
+
+        var lines = voucher.ItemLines.OrderBy(l => l.LineNo).Select(l =>
+        {
+            var item = l.StockItemId is { } itemId ? items.GetValueOrDefault(itemId) : null;
+            return new InvoiceLineDto(
+                l.Id, l.LineNo, l.Kind, l.StockItemId, item?.Name, l.GodownId, l.GodownId is { } g ? godowns.GetValueOrDefault(g) : null,
+                l.LedgerId, ledgerNames.GetValueOrDefault(l.LedgerId, "(unknown ledger)"), l.Description,
+                StockMath.ToQuantity(l.QuantityMilli), item is null ? null : units.GetValueOrDefault(item.UnitId), StockMath.ToRate(l.RateScaled),
+                l.DiscountMilliPercent / 1000m, Amounts.ToDecimal(l.TaxableMinor), l.Direction, l.Taxability, l.IgstMilliPercent / 1000m, l.HsnSac,
+                Amounts.ToDecimal(l.CgstMinor), Amounts.ToDecimal(l.StateTaxMinor), Amounts.ToDecimal(l.IgstMinor), Amounts.ToDecimal(l.CessMinor));
+        }).ToList();
+
+        var taxable = lines.Sum(l => l.Taxable);
+        var tax = lines.Sum(l => l.Cgst + l.StateTax + l.Igst + l.Cess);
+        var grandTotal = Amounts.ToDecimal(voucher.Lines.Where(l => l.LedgerId == voucher.PartyLedgerId).Sum(l => l.AmountMinor));
+        return new InvoiceDetailsDto(
+            voucher.PartyLedgerId!.Value,
+            ledgerNames.GetValueOrDefault(voucher.PartyLedgerId.Value, "(unknown ledger)"),
+            voucher.PlaceOfSupplyStateCode,
+            nature,
+            lines,
+            taxable,
+            lines.Sum(l => l.Cgst),
+            lines.Sum(l => l.StateTax),
+            lines.Sum(l => l.Igst),
+            lines.Sum(l => l.Cess),
+            grandTotal - taxable - tax,
+            grandTotal);
     }
 
     public async Task<PagedResult<VoucherListItem>> ListAsync(Guid companyId, VoucherQuery query, CancellationToken cancellationToken = default)
@@ -334,7 +392,7 @@ public sealed class VoucherService(
         ?? throw new NotFoundException("company");
 
     private async Task<Voucher> LoadVoucherAsync(Guid companyId, Guid voucherId, CancellationToken cancellationToken) =>
-        await db.Vouchers.Include(v => v.Lines).SingleOrDefaultAsync(v => v.CompanyId == companyId && v.Id == voucherId && !v.IsDeleted, cancellationToken)
+        await db.Vouchers.Include(v => v.Lines).Include(v => v.ItemLines).SingleOrDefaultAsync(v => v.CompanyId == companyId && v.Id == voucherId && !v.IsDeleted, cancellationToken)
         ?? throw new NotFoundException("voucher");
 
     private static List<VoucherLineSpec> ParseLines(IReadOnlyList<VoucherLineInput>? lines)

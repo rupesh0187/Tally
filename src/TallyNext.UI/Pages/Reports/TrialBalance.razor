@@ -21,7 +21,7 @@
     }
     else if (r.OpeningDifference != 0)
     {
-        <div class="alert warn">Opening balances differ by @Fmt.Balance(r.OpeningDifference > 0 ? r.OpeningDifference : 0, r.OpeningDifference < 0 ? -r.OpeningDifference : 0). Correct the ledger opening balances.</div>
+        <div class="alert warn">Opening balances differ by @Fmt.Balance(r.OpeningDifference > 0 ? r.OpeningDifference : 0, r.OpeningDifference < 0 ? -r.OpeningDifference : 0). Correct the ledger opening balances (opening stock values count as debit balances).</div>
     }
 
     <table class="data">
@@ -72,10 +72,13 @@
 
     private void Open(TrialBalanceRow row)
     {
-        if (!row.IsGroup)
+        if (row.IsGroup)
         {
-            Nav.NavigateTo($"reports/ledger?ledger={row.Id}");
+            return;
         }
+
+        // The opening stock row is computed from inventory, not a ledger.
+        Nav.NavigateTo(row.Id == Guid.Empty ? "reports/stock-summary" : $"reports/ledger?ledger={row.Id}");
     }
 
     private Task ApplyAsync((DateOnly From, DateOnly To) range)

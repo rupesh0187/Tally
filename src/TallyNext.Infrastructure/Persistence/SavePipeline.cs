@@ -5,6 +5,7 @@ using TallyNext.Domain.Accounts;
 using TallyNext.Domain.Audit;
 using TallyNext.Domain.Common;
 using TallyNext.Domain.Companies;
+using TallyNext.Domain.Inventory;
 using TallyNext.Domain.Vouchers;
 
 namespace TallyNext.Infrastructure.Persistence;
@@ -19,8 +20,8 @@ public sealed record PendingSyncChange(ISyncEntity Entity, EntityEntry Entry, bo
 public static class SavePipeline
 {
     /// <summary>
-    /// Returns the replicated aggregates with pending changes. A change to a voucher line marks its voucher as
-    /// changed, because a voucher replicates as a whole (header and lines).
+    /// Returns the replicated aggregates with pending changes. A change to a voucher line or invoice item line marks
+    /// its voucher as changed, because a voucher replicates as a whole (header, lines and item lines).
     /// </summary>
     public static IReadOnlyList<PendingSyncChange> CollectSyncChanges(DbContext context)
     {
@@ -32,6 +33,9 @@ public static class SavePipeline
             .Where(e => e.State is EntityState.Added or EntityState.Modified or EntityState.Deleted)
             .Select(e => e.State == EntityState.Deleted ? (Guid)e.OriginalValues[nameof(VoucherLine.VoucherId)]! : e.Entity.VoucherId)
             .ToHashSet();
+        changedVoucherIds.UnionWith(tracker.Entries<VoucherItemLine>()
+            .Where(e => e.State is EntityState.Added or EntityState.Modified or EntityState.Deleted)
+            .Select(e => e.State == EntityState.Deleted ? (Guid)e.OriginalValues[nameof(VoucherItemLine.VoucherId)]! : e.Entity.VoucherId));
 
         var result = new List<PendingSyncChange>();
         foreach (var entry in tracker.Entries().ToList())
@@ -172,9 +176,12 @@ public static class SavePipeline
             VoucherType => 2,
             AccountGroup => 3,
             Ledger => 4,
-            Voucher v when v.ReversalOfVoucherId is null => 5,
-            Voucher => 6,
-            _ => 9,
+            UnitOfMeasure => 5,
+            Godown => 6,
+            StockItem => 7,
+            Voucher v when v.ReversalOfVoucherId is null => 8,
+            Voucher => 9,
+            _ => 10,
         };
 
         return changes

@@ -1,5 +1,6 @@
 using TallyNext.Domain.Accounts;
 using TallyNext.Domain.Common;
+using TallyNext.Domain.Tax;
 using TallyNext.Domain.Vouchers;
 
 namespace TallyNext.Contracts.Accounts;
@@ -53,7 +54,39 @@ public sealed record LedgerDto(
     string? Email,
     string? Phone,
     int? CreditPeriodDays,
+    GstTaxType GstTaxType,
+    IReadOnlyList<GstRateEntry> GstRates,
     long Version);
+
+/// <summary>Editable GST rate entry (percentages, e.g. 18 or 0.25).</summary>
+public sealed class GstRateInput
+{
+    public DateOnly EffectiveFrom { get; set; }
+
+    public Taxability Taxability { get; set; } = Taxability.Taxable;
+
+    public decimal IgstPercent { get; set; }
+
+    public decimal CessPercent { get; set; }
+
+    public string? HsnSac { get; set; }
+
+    public static GstRateInput From(GstRateEntry entry) => new()
+    {
+        EffectiveFrom = entry.EffectiveFrom,
+        Taxability = entry.Taxability,
+        IgstPercent = entry.IgstPercent,
+        CessPercent = entry.CessPercent,
+        HsnSac = entry.HsnSac,
+    };
+
+    public GstRateEntry ToEntry() => new(
+        EffectiveFrom,
+        Taxability,
+        GstRateEntry.ToMilliPercent(IgstPercent, "igst_rate"),
+        GstRateEntry.ToMilliPercent(CessPercent, "cess_rate"),
+        string.IsNullOrWhiteSpace(HsnSac) ? null : HsnSac.Trim());
+}
 
 /// <summary>Compact projection used for type-to-search ledger pickers and cached on the client.</summary>
 public sealed record LedgerLookupItem(
@@ -100,6 +133,10 @@ public sealed class LedgerInput
     public string? Phone { get; set; }
 
     public int? CreditPeriodDays { get; set; }
+
+    public GstTaxType GstTaxType { get; set; }
+
+    public List<GstRateInput> GstRates { get; set; } = [];
 
     /// <summary>Optional client-generated id for idempotent creates.</summary>
     public Guid? Id { get; set; }

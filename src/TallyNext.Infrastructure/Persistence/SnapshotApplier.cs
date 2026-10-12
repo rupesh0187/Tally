@@ -3,6 +3,7 @@ using TallyNext.Contracts.Sync;
 using TallyNext.Domain.Accounts;
 using TallyNext.Domain.Common;
 using TallyNext.Domain.Companies;
+using TallyNext.Domain.Inventory;
 using TallyNext.Domain.Vouchers;
 
 namespace TallyNext.Infrastructure.Persistence;
@@ -25,6 +26,9 @@ public static class SnapshotApplier
             AccountGroupSnapshot s => await UpsertSimpleAsync<AccountGroup>(context, s.Id, s, version, cancellationToken),
             LedgerSnapshot s => await UpsertSimpleAsync<Ledger>(context, s.Id, s, version, cancellationToken),
             VoucherTypeSnapshot s => await UpsertSimpleAsync<VoucherType>(context, s.Id, s, version, cancellationToken),
+            UnitSnapshot s => await UpsertSimpleAsync<UnitOfMeasure>(context, s.Id, s, version, cancellationToken),
+            GodownSnapshot s => await UpsertSimpleAsync<Godown>(context, s.Id, s, version, cancellationToken),
+            StockItemSnapshot s => await UpsertSimpleAsync<StockItem>(context, s.Id, s, version, cancellationToken),
             // Membership ids are deterministic per (company, user), so a device's offline row and the server's coincide.
             MembershipSnapshot s => await UpsertSimpleAsync<CompanyMembership>(context, s.Id, s, version, cancellationToken),
             VoucherSnapshot s => await UpsertVoucherAsync(context, s, version, cancellationToken),
@@ -54,7 +58,10 @@ public static class SnapshotApplier
 
     private static async Task<Voucher> UpsertVoucherAsync(DbContext context, VoucherSnapshot snapshot, long version, CancellationToken cancellationToken)
     {
-        var voucher = await context.Set<Voucher>().Include(v => v.Lines).SingleOrDefaultAsync(v => v.Id == snapshot.Id, cancellationToken);
+        var voucher = await context.Set<Voucher>()
+            .Include(v => v.Lines)
+            .Include(v => v.ItemLines)
+            .SingleOrDefaultAsync(v => v.Id == snapshot.Id, cancellationToken);
         var isNew = voucher is null;
         if (voucher is null)
         {
@@ -91,6 +98,33 @@ public static class SnapshotApplier
             entry.Property(nameof(VoucherLine.CompanyId)).CurrentValue = snapshot.CompanyId;
             entry.Property(nameof(VoucherLine.VoucherDate)).CurrentValue = snapshot.Date;
             entry.Property(nameof(VoucherLine.IsPosted)).CurrentValue = isPosted;
+            if (lineIsNew)
+            {
+                context.Add(line);
+            }
+        }
+
+        var existingItems = voucher.ItemLines.ToDictionary(l => l.Id);
+        var incomingItemIds = (snapshot.ItemLines ?? []).Select(l => l.Id).ToHashSet();
+        if (!isNew)
+        {
+            foreach (var stale in existingItems.Values.Where(l => !incomingItemIds.Contains(l.Id)).ToList())
+            {
+                context.Remove(stale);
+            }
+        }
+
+        foreach (var itemSnapshot in snapshot.ItemLines ?? [])
+        {
+            var line = existingItems.GetValueOrDefault(itemSnapshot.Id);
+            var lineIsNew = line is null;
+            line ??= Create<VoucherItemLine>();
+            var entry = context.Entry(line);
+            entry.CurrentValues.SetValues(itemSnapshot);
+            entry.Property(nameof(VoucherItemLine.VoucherId)).CurrentValue = snapshot.Id;
+            entry.Property(nameof(VoucherItemLine.CompanyId)).CurrentValue = snapshot.CompanyId;
+            entry.Property(nameof(VoucherItemLine.VoucherDate)).CurrentValue = snapshot.Date;
+            entry.Property(nameof(VoucherItemLine.IsPosted)).CurrentValue = isPosted;
             if (lineIsNew)
             {
                 context.Add(line);

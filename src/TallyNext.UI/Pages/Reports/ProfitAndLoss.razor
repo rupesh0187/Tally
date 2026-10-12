@@ -13,12 +13,22 @@
 {
     @if (r.ExcludesInventory)
     {
-        <div class="alert warn">Inventory valuation is not included yet: opening and closing stock are not part of gross profit.</div>
+        <div class="alert warn">Inventory valuation is not included: opening and closing stock are not part of gross profit.</div>
     }
     <div class="statement">
         <div>
             <StatementTable Title="Trading income" Section="r.TradingIncome" />
             <StatementTable Title="Direct costs" Section="r.DirectCosts" />
+            @if (r.OpeningStock != 0 || r.ClosingStock != 0)
+            {
+                <table class="data" style="margin-bottom:.75rem">
+                    <thead><tr><th>Stock (<a href="reports/stock-summary">stock summary</a>)</th><th class="num">Amount</th></tr></thead>
+                    <tbody>
+                        <tr><td>Less: opening stock</td><td class="num">@Fmt.AmountOrZero(r.OpeningStock)</td></tr>
+                        <tr><td>Add: closing stock</td><td class="num">@Fmt.AmountOrZero(r.ClosingStock)</td></tr>
+                    </tbody>
+                </table>
+            }
             <table class="data"><tbody><tr class="total"><td>@(r.GrossProfit >= 0 ? "Gross profit" : "Gross loss")</td><td class="num">@Fmt.AmountOrZero(Math.Abs(r.GrossProfit))</td></tr></tbody></table>
         </div>
         <div>

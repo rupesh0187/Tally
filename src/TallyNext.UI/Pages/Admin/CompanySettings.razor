@@ -1,5 +1,6 @@
 @page "/company/settings"
 @inherits AppPage
+@inject LedgerCache LedgerCache
 
 <PageTitle>Company settings — TallyNext</PageTitle>
 
@@ -41,6 +42,28 @@
     </div>
 
     <div class="card">
+        <h2 style="margin-top:0">GST</h2>
+        <p class="muted">Regular taxpayers charge CGST + SGST/UTGST within the State and IGST across States on item and service invoices.
+            Composition dealers and unregistered businesses do not charge GST on invoices. Save the company GSTIN and State in the profile first.</p>
+        <div class="toolbar">
+            <label class="field">Registration
+                <select class="input" @bind="_registration" disabled="@(!State.Can(Permission.CompanyManage))">
+                    <option value="@GstRegistrationType.NotApplicable">Not registered</option>
+                    <option value="@GstRegistrationType.Regular">Regular</option>
+                    <option value="@GstRegistrationType.Composition">Composition</option>
+                </select>
+            </label>
+            @if (State.Can(Permission.CompanyManage))
+            {
+                <label class="small"><input type="checkbox" @bind="_createTaxLedgers" /> Create CGST, SGST, UTGST, IGST, Cess and Round Off ledgers when missing</label>
+                <button class="btn primary" disabled="@Busy" @onclick="SaveGstAsync">Apply</button>
+            }
+        </div>
+        <p class="muted small">Currently: @RegistrationLabel(c.GstRegistration)@(c.Gstin is { } g ? $" · GSTIN {g}" : "").
+            Tax is computed from the rates entered on items and ledgers. GSTINs are checked for format and checksum only; nothing is verified with the GST portal and no returns are filed.</p>
+    </div>
+
+    <div class="card">
         <h2 style="margin-top:0">Period lock</h2>
         <p class="muted">Vouchers dated on or before the lock date cannot be posted or reversed, on any device or in the browser.</p>
         <div class="toolbar">
@@ -60,6 +83,15 @@
     private CompanyDto? _company;
     private UpdateCompanyRequest _profile = new();
     private DateOnly? _lock;
+    private GstRegistrationType _registration;
+    private bool _createTaxLedgers = true;
+
+    private static string RegistrationLabel(GstRegistrationType type) => type switch
+    {
+        GstRegistrationType.Regular => "regular GST taxpayer",
+        GstRegistrationType.Composition => "composition dealer",
+        _ => "not registered",
+    };
 
     protected override Task OnInitializedAsync() => State.HasCompany ? LoadAsync() : Task.CompletedTask;
 
@@ -73,7 +105,19 @@
             Pan = _company.Pan, Email = _company.Email, Phone = _company.Phone, ExpectedVersion = _company.Version,
         };
         _lock = _company.LockedThroughDate;
+        _registration = _company.GstRegistration;
     });
+
+    private async Task SaveGstAsync()
+    {
+        var request = new SetGstRegistrationRequest { Registration = _registration, CreateTaxLedgers = _createTaxLedgers };
+        if (await RunAsync(async () => _company = await Runner.RunAsync<GstService, CompanyDto>(s => s.SetRegistrationAsync(State.CompanyId, request))))
+        {
+            LedgerCache.Invalidate();
+            _profile.ExpectedVersion = _company!.Version;
+            Notice = _company.GstRegistration == GstRegistrationType.Regular ? "GST registration saved; the tax ledgers are ready." : "GST registration saved.";
+        }
+    }
 
     private void SetLock(ChangeEventArgs e) =>
         _lock = DateOnly.TryParse(e.Value?.ToString(), CultureInfo.InvariantCulture, out var d) ? d : null;

@@ -1,0 +1,98 @@
+@page "/reports/stock-summary"
+@inherits AppPage
+
+<PageTitle>Stock Summary — TallyNext</PageTitle>
+
+<div class="page-head">
+    <div><h1>Stock Summary</h1><div class="muted">@Fmt.Date(_from) to @Fmt.Date(_to) · values at cost</div></div>
+    <PeriodBar From="_from" To="_to" Year="State.CurrentYear" OnChange="ApplyAsync" />
+</div>
+<div class="toolbar" style="margin-bottom:.5rem">
+    <label class="small"><input type="checkbox" @bind="_byGodown" /> Show quantity by godown</label>
+    <label class="small"><input type="checkbox" @bind="_hideEmpty" /> Hide items without stock or movement</label>
+</div>
+<Alerts Error="@Error" />
+
+@if (_report is { } r)
+{
+    @if (r.Rows.Any(x => x.WentNegative))
+    {
+        <div class="alert warn">Some items went below zero during the period (for example two offline devices sold the last units). Their cost is estimated at the last known unit cost until stock comes in.</div>
+    }
+    <table class="data">
+        <thead>
+            <tr>
+                <th>Item</th>
+                <th class="num">Opening qty</th><th class="num">Opening value</th>
+                <th class="num">Inward qty</th><th class="num">Inward value</th>
+                <th class="num">Outward qty</th><th class="num">Cost of outward</th>
+                <th class="num">Closing qty</th><th class="num">Closing value</th>
+            </tr>
+        </thead>
+        <tbody>
+            @foreach (var row in r.Rows.Where(x => !_hideEmpty || x.OpeningQuantity != 0 || x.InwardQuantity != 0 || x.OutwardQuantity != 0 || x.ClosingQuantity != 0))
+            {
+                <tr class="clickable" @onclick='() => Nav.NavigateTo($"inventory/items/{row.StockItemId}")'>
+                    <td>@row.Name @if (row.WentNegative) { <span class="tag draft">negative</span> }</td>
+                    <td class="num">@Qty(row.OpeningQuantity, row.UnitSymbol)</td><td class="num">@Fmt.Amount(row.OpeningValue)</td>
+                    <td class="num">@Qty(row.InwardQuantity, row.UnitSymbol)</td><td class="num">@Fmt.Amount(row.InwardValue)</td>
+                    <td class="num">@Qty(row.OutwardQuantity, row.UnitSymbol)</td><td class="num">@Fmt.Amount(row.OutwardCost)</td>
+                    <td class="num">@Qty(row.ClosingQuantity, row.UnitSymbol)</td><td class="num">@Fmt.AmountOrZero(row.ClosingValue)</td>
+                </tr>
+                @if (_byGodown)
+                {
+                    @foreach (var g in row.ByGodown)
+                    {
+                        <tr><td class="indent-1 muted small">@g.GodownName</td><td colspan="6"></td><td class="num muted small">@Qty(g.Quantity, row.UnitSymbol)</td><td></td></tr>
+                    }
+                }
+            }
+            @if (r.Rows.Count == 0)
+            {
+                <tr><td colspan="9" class="muted">No stock items. <a href="inventory/items/new">Create one</a>.</td></tr>
+            }
+        </tbody>
+        <tfoot>
+            <tr class="total">
+                <td>Total</td><td></td><td class="num">@Fmt.AmountOrZero(r.TotalOpeningValue)</td><td colspan="5"></td><td class="num">@Fmt.AmountOrZero(r.TotalClosingValue)</td>
+            </tr>
+        </tfoot>
+    </table>
+    <p class="muted small">Purchases come in at their taxable value (GST excluded). Sales, purchase returns and other outward movements go out at cost — weighted average or FIFO, as set on each item. Sales returns come back at the cost at that time.</p>
+}
+
+@code {
+    private DateOnly _from;
+    private DateOnly _to;
+    private bool _byGodown;
+    private bool _hideEmpty;
+    private StockSummaryReport? _report;
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (!State.HasCompany)
+        {
+            return;
+        }
+
+        _from = State.PeriodStart;
+        _to = State.Today < State.CurrentYear.End ? State.Today : State.CurrentYear.End;
+        if (_to < _from)
+        {
+            _to = _from;
+        }
+
+        await LoadAsync();
+    }
+
+    private static string Qty(decimal quantity, string unit) => quantity == 0 ? "" : $"{quantity.ToString("#,##0.###", CultureInfo.InvariantCulture)} {unit}";
+
+    private Task ApplyAsync((DateOnly From, DateOnly To) range)
+    {
+        (_from, _to) = range;
+        return LoadAsync();
+    }
+
+    private Task LoadAsync() => RunAsync(async () =>
+        _report = await Runner.RunAsync<ReportService, StockSummaryReport>(s => s.StockSummaryAsync(State.CompanyId, _from, _to)));
+}

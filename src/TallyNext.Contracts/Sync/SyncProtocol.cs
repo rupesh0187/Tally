@@ -27,13 +27,16 @@ public static class SyncEntityTypes
     public const string VoucherType = "voucher-type";
     public const string Voucher = "voucher";
     public const string Membership = "membership";
+    public const string Unit = "unit";
+    public const string Godown = "godown";
+    public const string StockItem = "stock-item";
 
     /// <summary>Entity types devices may upload. Memberships are server-authored only (download-only).</summary>
     public static IReadOnlySet<string> Uploadable { get; } =
-        new HashSet<string>(StringComparer.Ordinal) { Company, AccountGroup, Ledger, VoucherType, Voucher };
+        new HashSet<string>(StringComparer.Ordinal) { Company, AccountGroup, Ledger, VoucherType, Voucher, Unit, Godown, StockItem };
 
     public static IReadOnlySet<string> All { get; } =
-        new HashSet<string>(StringComparer.Ordinal) { Company, AccountGroup, Ledger, VoucherType, Voucher, Membership };
+        new HashSet<string>(StringComparer.Ordinal) { Company, AccountGroup, Ledger, VoucherType, Voucher, Membership, Unit, Godown, StockItem };
 }
 
 /// <summary>State-based replication: an upsert carries the full new state; a delete is a tombstone.</summary>

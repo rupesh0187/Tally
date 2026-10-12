@@ -1,10 +1,14 @@
+using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.ChangeTracking;
 using Microsoft.EntityFrameworkCore.Metadata.Builders;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using TallyNext.Domain.Accounts;
 using TallyNext.Domain.Audit;
 using TallyNext.Domain.Common;
 using TallyNext.Domain.Companies;
+using TallyNext.Domain.Inventory;
+using TallyNext.Domain.Tax;
 using TallyNext.Domain.Vouchers;
 
 namespace TallyNext.Infrastructure.Persistence;
@@ -29,6 +33,10 @@ public static class AccountingModel
         ConfigureVoucherType(modelBuilder.Entity<VoucherType>());
         ConfigureVoucher(modelBuilder.Entity<Voucher>());
         ConfigureVoucherLine(modelBuilder.Entity<VoucherLine>());
+        ConfigureVoucherItemLine(modelBuilder.Entity<VoucherItemLine>());
+        ConfigureUnit(modelBuilder.Entity<UnitOfMeasure>());
+        ConfigureGodown(modelBuilder.Entity<Godown>());
+        ConfigureStockItem(modelBuilder.Entity<StockItem>());
         ConfigureSeries(modelBuilder.Entity<VoucherNumberSeries>());
         ConfigureAudit(modelBuilder.Entity<AuditEntry>());
         ConfigureAuditHead(modelBuilder.Entity<AuditChainHead>());
@@ -119,6 +127,7 @@ public static class AccountingModel
         b.Property(l => l.Pincode).HasMaxLength(10);
         b.Property(l => l.Email).HasMaxLength(254);
         b.Property(l => l.Phone).HasMaxLength(30);
+        ConfigureGstRates(b.Property(l => l.GstRates));
         b.HasIndex(l => new { l.CompanyId, l.NormalizedName }).IsUnique().HasFilter(NotDeletedFilter);
         b.HasIndex(l => new { l.CompanyId, l.GroupId });
         b.HasOne<Company>().WithMany().HasForeignKey(l => l.CompanyId).OnDelete(DeleteBehavior.Restrict);
@@ -156,6 +165,14 @@ public static class AccountingModel
             .OnDelete(DeleteBehavior.Cascade);
         b.Navigation(v => v.Lines).UsePropertyAccessMode(PropertyAccessMode.Field).HasField("_lines");
 
+        b.Property(v => v.PlaceOfSupplyStateCode).HasMaxLength(2);
+        b.HasMany(v => v.ItemLines)
+            .WithOne()
+            .HasForeignKey(l => l.VoucherId)
+            .OnDelete(DeleteBehavior.Cascade);
+        b.Navigation(v => v.ItemLines).UsePropertyAccessMode(PropertyAccessMode.Field).HasField("_itemLines");
+        b.HasOne<Ledger>().WithMany().HasForeignKey(v => v.PartyLedgerId).OnDelete(DeleteBehavior.Restrict);
+
         // Registers and Day Book: company + date range, stable order by id.
         b.HasIndex(v => new { v.CompanyId, v.Date, v.Id });
 
@@ -187,6 +204,75 @@ public static class AccountingModel
         b.HasIndex(l => new { l.VoucherId, l.LineNo }).IsUnique();
         b.HasOne<Ledger>().WithMany().HasForeignKey(l => l.LedgerId).OnDelete(DeleteBehavior.Restrict);
     }
+
+    private static void ConfigureVoucherItemLine(EntityTypeBuilder<VoucherItemLine> b)
+    {
+        b.ToTable("VoucherItemLines");
+        b.HasKey(l => l.Id);
+        b.Property(l => l.Id).ValueGeneratedNever();
+        b.Property(l => l.Description).HasMaxLength(500);
+        b.Property(l => l.HsnSac).HasMaxLength(8);
+
+        // Stock valuation replays one item's movements in date order; the GST summary scans a date range.
+        b.HasIndex(l => new { l.CompanyId, l.StockItemId, l.VoucherDate });
+        b.HasIndex(l => new { l.CompanyId, l.VoucherDate });
+        b.HasIndex(l => new { l.VoucherId, l.LineNo }).IsUnique();
+        b.HasOne<StockItem>().WithMany().HasForeignKey(l => l.StockItemId).OnDelete(DeleteBehavior.Restrict);
+        b.HasOne<Godown>().WithMany().HasForeignKey(l => l.GodownId).OnDelete(DeleteBehavior.Restrict);
+        b.HasOne<Ledger>().WithMany().HasForeignKey(l => l.LedgerId).OnDelete(DeleteBehavior.Restrict);
+    }
+
+    private static void ConfigureUnit(EntityTypeBuilder<UnitOfMeasure> b)
+    {
+        b.ToTable("Units");
+        b.HasKey(u => u.Id);
+        b.Property(u => u.Id).ValueGeneratedNever();
+        ConfigureSyncColumns(b);
+        b.Property(u => u.Symbol).HasMaxLength(10).IsRequired();
+        b.Property(u => u.NormalizedSymbol).HasMaxLength(10).IsRequired();
+        b.Property(u => u.Name).HasMaxLength(NameRules.MaxLength).IsRequired();
+        b.HasIndex(u => new { u.CompanyId, u.NormalizedSymbol }).IsUnique().HasFilter(NotDeletedFilter);
+        b.HasOne<Company>().WithMany().HasForeignKey(u => u.CompanyId).OnDelete(DeleteBehavior.Restrict);
+    }
+
+    private static void ConfigureGodown(EntityTypeBuilder<Godown> b)
+    {
+        b.ToTable("Godowns");
+        b.HasKey(g => g.Id);
+        b.Property(g => g.Id).ValueGeneratedNever();
+        ConfigureSyncColumns(b);
+        b.Property(g => g.Name).HasMaxLength(NameRules.MaxLength).IsRequired();
+        b.Property(g => g.NormalizedName).HasMaxLength(NameRules.MaxLength).IsRequired();
+        b.HasIndex(g => new { g.CompanyId, g.NormalizedName }).IsUnique().HasFilter(NotDeletedFilter);
+        b.HasOne<Company>().WithMany().HasForeignKey(g => g.CompanyId).OnDelete(DeleteBehavior.Restrict);
+    }
+
+    private static void ConfigureStockItem(EntityTypeBuilder<StockItem> b)
+    {
+        b.ToTable("StockItems");
+        b.HasKey(i => i.Id);
+        b.Property(i => i.Id).ValueGeneratedNever();
+        ConfigureSyncColumns(b);
+        b.Property(i => i.Name).HasMaxLength(NameRules.MaxLength).IsRequired();
+        b.Property(i => i.NormalizedName).HasMaxLength(NameRules.MaxLength).IsRequired();
+        b.Property(i => i.Alias).HasMaxLength(NameRules.MaxLength);
+        b.Property(i => i.PartNumber).HasMaxLength(50);
+        ConfigureGstRates(b.Property(i => i.GstRates));
+        b.HasIndex(i => new { i.CompanyId, i.NormalizedName }).IsUnique().HasFilter(NotDeletedFilter);
+        b.HasOne<Company>().WithMany().HasForeignKey(i => i.CompanyId).OnDelete(DeleteBehavior.Restrict);
+        b.HasOne<UnitOfMeasure>().WithMany().HasForeignKey(i => i.UnitId).OnDelete(DeleteBehavior.Restrict);
+        b.HasOne<Godown>().WithMany().HasForeignKey(i => i.OpeningGodownId).OnDelete(DeleteBehavior.Restrict);
+    }
+
+    /// <summary>
+    /// A GST rate history is small (a handful of effective-dated entries) and always read with its owner, so it is
+    /// stored as JSON text in one column on both providers rather than as a child table.
+    /// </summary>
+    private static void ConfigureGstRates(PropertyBuilder<IReadOnlyList<GstRateEntry>> property) =>
+        property
+            .HasConversion(new GstRatesConverter(), new GstRatesComparer())
+            .HasColumnName("GstRatesJson")
+            .IsRequired();
 
     private static void ConfigureSeries(EntityTypeBuilder<VoucherNumberSeries> b)
     {
@@ -225,6 +311,17 @@ public static class AccountingModel
         b.Property(h => h.ChainKey).ValueGeneratedNever();
         b.Property(h => h.LastHash).HasMaxLength(64).IsRequired();
     }
+
+    private static readonly JsonSerializerOptions GstRatesJson = new(JsonSerializerDefaults.General);
+
+    private sealed class GstRatesConverter() : ValueConverter<IReadOnlyList<GstRateEntry>, string>(
+        v => JsonSerializer.Serialize(v, GstRatesJson),
+        v => string.IsNullOrEmpty(v) ? new List<GstRateEntry>() : JsonSerializer.Deserialize<List<GstRateEntry>>(v, GstRatesJson) ?? new List<GstRateEntry>());
+
+    private sealed class GstRatesComparer() : ValueComparer<IReadOnlyList<GstRateEntry>>(
+        (a, b) => a == null ? b == null : b != null && a.SequenceEqual(b),
+        v => v.Aggregate(0, (hash, e) => HashCode.Combine(hash, e)),
+        v => v.ToList());
 
     private sealed class UtcDateTimeConverter() : ValueConverter<DateTime, DateTime>(
         v => v.Kind == DateTimeKind.Utc ? v : DateTime.SpecifyKind(v, DateTimeKind.Utc),

@@ -66,7 +66,10 @@ public sealed class SyncQueryService(ServerDbContext db, IAccessGuard guard, IAu
             SyncEntityTypes.AccountGroup => await db.AccountGroups.AsNoTracking().SingleOrDefaultAsync(e => e.Id == entityId && e.CompanyId == companyId, cancellationToken),
             SyncEntityTypes.Ledger => await db.Ledgers.AsNoTracking().SingleOrDefaultAsync(e => e.Id == entityId && e.CompanyId == companyId, cancellationToken),
             SyncEntityTypes.VoucherType => await db.VoucherTypes.AsNoTracking().SingleOrDefaultAsync(e => e.Id == entityId && e.CompanyId == companyId, cancellationToken),
-            SyncEntityTypes.Voucher => await db.Vouchers.AsNoTracking().Include(v => v.Lines).SingleOrDefaultAsync(e => e.Id == entityId && e.CompanyId == companyId, cancellationToken),
+            SyncEntityTypes.Voucher => await db.Vouchers.AsNoTracking().Include(v => v.Lines).Include(v => v.ItemLines).SingleOrDefaultAsync(e => e.Id == entityId && e.CompanyId == companyId, cancellationToken),
+            SyncEntityTypes.Unit => await db.Units.AsNoTracking().SingleOrDefaultAsync(e => e.Id == entityId && e.CompanyId == companyId, cancellationToken),
+            SyncEntityTypes.Godown => await db.Godowns.AsNoTracking().SingleOrDefaultAsync(e => e.Id == entityId && e.CompanyId == companyId, cancellationToken),
+            SyncEntityTypes.StockItem => await db.StockItems.AsNoTracking().SingleOrDefaultAsync(e => e.Id == entityId && e.CompanyId == companyId, cancellationToken),
             SyncEntityTypes.Membership => await db.CompanyMemberships.AsNoTracking().SingleOrDefaultAsync(e => e.Id == entityId && e.CompanyId == companyId, cancellationToken),
             _ => throw new ValidationFailedException("sync.entity_type_unknown", $"Unknown entity type '{entityType}'."),
         };

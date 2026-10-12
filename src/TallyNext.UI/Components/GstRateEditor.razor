@@ -1,0 +1,92 @@
+@* Effective-dated GST rate history (rates change by notification; past invoices keep the rate they used). *@
+<table class="data">
+    <thead>
+        <tr><th>Effective from</th><th>Taxability</th><th class="num">GST %</th><th class="num">Cess %</th><th>HSN / SAC</th><th></th></tr>
+    </thead>
+    <tbody>
+        @if (Rates.Count == 0)
+        {
+            <tr><td colspan="6" class="muted">No GST rate. Invoices charging GST will ask for one.</td></tr>
+        }
+        @for (var i = 0; i < Rates.Count; i++)
+        {
+            var rate = Rates[i];
+            var index = i;
+            <tr>
+                <td><input class="input" type="date" value="@Fmt.Iso(rate.EffectiveFrom)" disabled="@Disabled"
+                           @onchange="e => SetDate(rate, e.Value)" aria-label="@($"Rate {index + 1} effective from")" /></td>
+                <td>
+                    <select class="input" @bind="rate.Taxability" disabled="@Disabled" aria-label="@($"Rate {index + 1} taxability")">
+                        @foreach (var t in Enum.GetValues<Taxability>())
+                        {
+                            <option value="@t">@Label(t)</option>
+                        }
+                    </select>
+                </td>
+                <td><input class="input num" inputmode="decimal" style="width:6rem" @bind="rate.IgstPercent" disabled="@(Disabled || rate.Taxability != Taxability.Taxable)"
+                           aria-label="@($"Rate {index + 1} GST percent")" /></td>
+                <td><input class="input num" inputmode="decimal" style="width:6rem" @bind="rate.CessPercent" disabled="@(Disabled || rate.Taxability != Taxability.Taxable)"
+                           aria-label="@($"Rate {index + 1} cess percent")" /></td>
+                <td><input class="input mono" style="width:8rem" maxlength="8" @bind="rate.HsnSac" disabled="@Disabled" aria-label="@($"Rate {index + 1} HSN or SAC")" /></td>
+                <td>
+                    @if (!Disabled)
+                    {
+                        <button type="button" class="btn small" @onclick="() => Rates.RemoveAt(index)" aria-label="@($"Remove rate {index + 1}")">✕</button>
+                    }
+                </td>
+            </tr>
+        }
+    </tbody>
+</table>
+@if (!Disabled)
+{
+    <div class="toolbar" style="margin-top:.5rem">
+        @foreach (var preset in Presets)
+        {
+            <button type="button" class="btn small" @onclick="() => Add(preset)">+ @preset%</button>
+        }
+        <button type="button" class="btn small" @onclick="() => Add(null)">+ Exempt / nil</button>
+    </div>
+    <p class="muted small">GST % is the full (integrated) rate; within a State it is split equally into CGST and SGST/UTGST. Rates are not looked up from any official source: enter the rate notified for the item.</p>
+}
+
+@code {
+    private static readonly decimal[] Presets = [0m, 5m, 12m, 18m, 28m];
+
+    [Parameter, EditorRequired]
+    public List<GstRateInput> Rates { get; set; } = [];
+
+    [Parameter]
+    public DateOnly DefaultFrom { get; set; }
+
+    [Parameter]
+    public bool Disabled { get; set; }
+
+    private static string Label(Taxability t) => t switch
+    {
+        Taxability.Taxable => "Taxable",
+        Taxability.Exempt => "Exempt",
+        Taxability.NilRated => "Nil rated",
+        _ => "Non-GST",
+    };
+
+    private void Add(decimal? percent)
+    {
+        var from = Rates.Count == 0 ? DefaultFrom : Rates.Max(r => r.EffectiveFrom).AddDays(1);
+        Rates.Add(new GstRateInput
+        {
+            EffectiveFrom = from,
+            Taxability = percent is null ? Taxability.Exempt : Taxability.Taxable,
+            IgstPercent = percent ?? 0,
+            HsnSac = Rates.LastOrDefault()?.HsnSac,
+        });
+    }
+
+    private static void SetDate(GstRateInput rate, object? value)
+    {
+        if (DateOnly.TryParse(value?.ToString(), CultureInfo.InvariantCulture, out var d))
+        {
+            rate.EffectiveFrom = d;
+        }
+    }
+}

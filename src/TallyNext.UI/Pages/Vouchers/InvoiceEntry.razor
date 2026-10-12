@@ -1,0 +1,721 @@
+@page "/invoices/new/{Slug}"
+@page "/invoices/{EditId:guid}/edit"
+@inherits AppPage
+@using Microsoft.Extensions.Logging
+@inject IJSRuntime JS
+@inject IServiceProvider Services
+@inject StockItemCache ItemCache
+@inject LedgerCache LedgerCache
+
+<PageTitle>@(_type?.Name ?? "Invoice") — TallyNext</PageTitle>
+
+<div class="voucher invoice" @ref="_container">
+    <div class="page-head">
+        <div>
+            <div class="voucher-type-badge">@(_type?.Name ?? "Invoice") <span class="muted small">item invoice · @(EditId is null ? "new" : "draft")</span></div>
+            <div class="muted small">@Hint</div>
+        </div>
+        <div class="muted small">
+            Enter = next field · Ctrl+S = save · Esc = back
+            @if (EditId is null && _type is not null)
+            {
+                <br /><a href="@($"vouchers/new/{VoucherSlugs.Of(_type.BaseType)}")">Accounting mode <kbd>Ctrl+H</kbd></a>
+            }
+        </div>
+    </div>
+
+    <Alerts Error="@Error" Notice="@Notice" />
+
+    @if (_type is not null)
+    {
+        <div class="card">
+            <div class="invoice-head">
+                <label class="field">Voucher type
+                    <select class="input" value="@_type.Id" @onchange="ChangeTypeAsync" disabled="@(EditId is not null)">
+                        @foreach (var t in _types)
+                        {
+                            <option value="@t.Id">@t.Name (@VoucherSlugs.ShortcutOf(t.BaseType))</option>
+                        }
+                    </select>
+                </label>
+                <label class="field">Date
+                    <input id="i-date" class="input" type="date" value="@Fmt.Iso(_date)" @onchange="SetDateAsync" data-next="i-party" />
+                </label>
+                <label class="field">@(IsOutward ? "Customer" : "Supplier") (party)
+                    <LedgerPicker Id="i-party" CompanyId="State.CompanyId" Value="_party" ValueChanged="PartyChosenAsync" NextId="@ItemId(0)"
+                                  Filter="IsPartyLedger" Invalid="@(_showValidation && _party is null)" Label="Party ledger" />
+                </label>
+                <label class="field">Place of supply
+                    <select class="input" value="@(_placeOfSupply ?? "")" @onchange="SetPlaceOfSupplyAsync">
+                        <option value="">Auto (@(IsOutward ? "party's State" : "company's State"))</option>
+                        @foreach (var s in CompanyService.States)
+                        {
+                            <option value="@s.Code">@s.Code — @s.Name</option>
+                        }
+                    </select>
+                </label>
+                <label class="field">Reference / bill no.
+                    <input class="input" @bind="_reference" maxlength="100" />
+                </label>
+            </div>
+
+            <div class="lines invoice-lines" role="table" aria-label="Invoice lines">
+                <div class="line head" role="row">
+                    <span role="columnheader">Type</span><span role="columnheader">Item / description</span><span role="columnheader">Godown</span>
+                    <span role="columnheader" class="num">Qty</span><span role="columnheader" class="num">Rate</span><span role="columnheader" class="num">Disc %</span>
+                    <span role="columnheader">@(IsOutward ? "Sales" : "Purchase") ledger</span><span role="columnheader" class="num">Value</span>
+                    <span role="columnheader" class="num">GST</span><span></span>
+                </div>
+                @for (var i = 0; i < _lines.Count; i++)
+                {
+                    var index = i;
+                    var line = _lines[i];
+                    var preview = PreviewFor(index);
+                    <div class="line" role="row">
+                        <button type="button" class="side-toggle" @onclick="() => ToggleKind(index)" aria-label="@($"Line {index + 1}: {(line.Kind == InvoiceLineKind.Stock ? "stock item" : "service")}, press to switch")">
+                            @(line.Kind == InvoiceLineKind.Stock ? "Item" : "Svc")
+                        </button>
+                        @if (line.Kind == InvoiceLineKind.Stock)
+                        {
+                            <ItemPicker Id="@ItemId(index)" Items="_items" Value="line.ItemId" ValueChanged="id => ItemChosenAsync(index, id)" NextId="@QtyId(index)"
+                                        OnEmptyEnter="() => EmptyItemEnterAsync(index)"
+                                        Invalid="@(_showValidation && line.ItemId is null && line.HasContent)" Label="@($"Item for line {index + 1}")" />
+                            <select class="input" value="@line.GodownId" @onchange="e => SetGodownAsync(line, e.Value)" aria-label="@($"Godown for line {index + 1}")">
+                                @foreach (var g in _godowns)
+                                {
+                                    <option value="@g.Id">@g.Name</option>
+                                }
+                            </select>
+                            <input id="@QtyId(index)" class="input num @(_showValidation && line.ItemId is not null && !(line.Quantity > 0) ? "invalid" : "")" inputmode="decimal"
+                                   aria-label="@($"Quantity for line {index + 1}")" value="@line.QuantityText" placeholder="@UnitOf(line)"
+                                   @oninput="e => line.QuantityText = e.Value?.ToString() ?? string.Empty" @onchange="RefreshPreviewAsync" data-next="@RateId(index)" />
+                            <input id="@RateId(index)" class="input num" inputmode="decimal" aria-label="@($"Rate for line {index + 1}")" value="@line.RateText"
+                                   @oninput="e => line.RateText = e.Value?.ToString() ?? string.Empty" @onchange="RefreshPreviewAsync" data-next="@DiscId(index)" />
+                            <input id="@DiscId(index)" class="input num" inputmode="decimal" aria-label="@($"Discount percent for line {index + 1}")" value="@line.DiscountText"
+                                   @oninput="e => line.DiscountText = e.Value?.ToString() ?? string.Empty" @onchange="RefreshPreviewAsync"
+                                   data-next="@(index < _lines.Count - 1 ? ItemId(index + 1) : null)" @onkeydown="e => LastFieldKeyDownAsync(e, index)" />
+                        }
+                        else
+                        {
+                            <input id="@ItemId(index)" class="input" maxlength="500" placeholder="Description of the service" aria-label="@($"Description for line {index + 1}")"
+                                   value="@line.Description" @oninput="e => line.Description = e.Value?.ToString()" data-next="@AmountId(index)" />
+                            <span class="muted small">—</span>
+                            <span></span>
+                            <span></span>
+                            <span></span>
+                        }
+                        <select class="input" value="@(line.LedgerId?.ToString() ?? "")" @onchange="e => SetLedgerAsync(line, e.Value)" aria-label="@($"Ledger for line {index + 1}")">
+                            <option value="">@(line.Kind == InvoiceLineKind.Stock ? "(default)" : "— choose —")</option>
+                            @foreach (var l in _itemLedgers)
+                            {
+                                <option value="@l.Id">@l.Name</option>
+                            }
+                        </select>
+                        @if (line.Kind == InvoiceLineKind.Stock)
+                        {
+                            <span class="num">@Fmt.Amount(line.Value)</span>
+                        }
+                        else
+                        {
+                            <input id="@AmountId(index)" class="input num @(_showValidation && !(line.Amount > 0) ? "invalid" : "")" inputmode="decimal"
+                                   aria-label="@($"Amount for line {index + 1}")" value="@line.AmountText"
+                                   @oninput="e => line.AmountText = e.Value?.ToString() ?? string.Empty" @onchange="RefreshPreviewAsync"
+                                   data-next="@(index < _lines.Count - 1 ? ItemId(index + 1) : null)" @onkeydown="e => LastFieldKeyDownAsync(e, index)" />
+                        }
+                        <span class="num small" title="@(preview is null ? "" : $"{preview.GstPercent:0.###}% · HSN/SAC {preview.HsnSac}")">
+                            @(preview is null ? "" : $"{preview.GstPercent:0.###}% · {Fmt.AmountOrZero(preview.Tax)}")
+                        </span>
+                        <button type="button" class="btn small" title="Remove line" disabled="@(_lines.Count <= 1)" @onclick="() => RemoveAsync(index)"
+                                aria-label="@($"Remove line {index + 1}")">✕</button>
+                    </div>
+                }
+            </div>
+            <div class="toolbar" style="margin-top:.5rem">
+                <button type="button" class="btn small" @onclick="() => AddLineAsync(InvoiceLineKind.Stock)">+ Item line</button>
+                <button type="button" class="btn small" @onclick="() => AddLineAsync(InvoiceLineKind.Service)">+ Service line</button>
+                @if (_items.Count == 0)
+                {
+                    <span class="muted small">No stock items yet — <a href="inventory/items/new">create one</a>.</span>
+                }
+            </div>
+
+            <div class="invoice-summary" aria-live="polite">
+                <div>
+                    @if (_preview is { } pv)
+                    {
+                        <div><strong>@NatureLabel(pv)</strong></div>
+                        @if (!pv.ChargesGst)
+                        {
+                            <div class="muted small">GST is not charged on this invoice (company not registered for regular GST, a zero-rated supply, or an unregistered supplier).</div>
+                        }
+                    }
+                    else if (_previewError is not null)
+                    {
+                        <div class="muted small">@_previewError</div>
+                    }
+                    <label class="small" style="display:block; margin-top:.5rem"><input type="checkbox" @bind="_roundOff" @bind:after="RefreshPreviewAsync" /> Round the total to whole rupees</label>
+                </div>
+                <table class="data">
+                    <tbody>
+                        <tr><td>Taxable value</td><td class="num">@Fmt.AmountOrZero(_preview?.Taxable ?? LocalTaxable)</td></tr>
+                        @if (_preview is { } tot)
+                        {
+                            @if (tot.Cgst != 0) { <tr><td>CGST</td><td class="num">@Fmt.AmountOrZero(tot.Cgst)</td></tr> }
+                            @if (tot.StateTax != 0) { <tr><td>@(tot.SupplyNature == SupplyNature.IntraStateUnionTerritory ? "UTGST" : "SGST")</td><td class="num">@Fmt.AmountOrZero(tot.StateTax)</td></tr> }
+                            @if (tot.Igst != 0) { <tr><td>IGST</td><td class="num">@Fmt.AmountOrZero(tot.Igst)</td></tr> }
+                            @if (tot.Cess != 0) { <tr><td>Cess</td><td class="num">@Fmt.AmountOrZero(tot.Cess)</td></tr> }
+                            @if (tot.RoundOff != 0) { <tr><td>Round off</td><td class="num">@(tot.RoundOff > 0 ? "" : "−")@Fmt.AmountOrZero(Math.Abs(tot.RoundOff))</td></tr> }
+                            <tr class="total"><td>Invoice total</td><td class="num">@Fmt.AmountOrZero(tot.GrandTotal)</td></tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+
+            <label class="field" style="margin-top:1rem">Narration
+                <textarea id="i-narration" class="input" rows="2" maxlength="1000" @bind="_narration" @bind:event="oninput" @onkeydown="NarrationKeyDownAsync"></textarea>
+            </label>
+            <div class="form-actions">
+                <button class="btn primary" disabled="@Busy" @onclick="() => SaveAsync(post: true)">Save <kbd>Ctrl+S</kbd></button>
+                <button class="btn" disabled="@Busy" @onclick="() => SaveAsync(post: false)">Save as draft</button>
+                <button class="btn" disabled="@Busy" @onclick="ResetAsync">Clear</button>
+            </div>
+        </div>
+
+        @if (_recent.Count > 0)
+        {
+            <h2>Saved in this session</h2>
+            <table class="data">
+                <thead><tr><th>Date</th><th>No.</th><th>Type</th><th>Party</th><th class="num">Total</th><th>Status</th></tr></thead>
+                <tbody>
+                    @foreach (var v in _recent)
+                    {
+                        <tr class="clickable" @onclick='() => Nav.NavigateTo($"vouchers/{v.Id}")'>
+                            <td>@Fmt.Date(v.Date)</td><td>@(v.Number ?? "—")</td><td>@v.VoucherTypeName</td><td>@v.Invoice?.PartyName</td><td class="num">@Fmt.AmountOrZero(v.Invoice?.GrandTotal ?? v.Total)</td><td>@v.Status</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        }
+    }
+</div>
+
+@code {
+    private sealed class LineModel
+    {
+        public InvoiceLineKind Kind { get; set; } = InvoiceLineKind.Stock;
+
+        public Guid? ItemId { get; set; }
+
+        public Guid? GodownId { get; set; }
+
+        public Guid? LedgerId { get; set; }
+
+        public string? Description { get; set; }
+
+        public string QuantityText { get; set; } = string.Empty;
+
+        public string RateText { get; set; } = string.Empty;
+
+        public string DiscountText { get; set; } = string.Empty;
+
+        public string AmountText { get; set; } = string.Empty;
+
+        public decimal? Quantity => Fmt.ParseAmount(QuantityText);
+
+        public decimal? Rate => Fmt.ParseAmount(RateText);
+
+        public decimal Discount => Fmt.ParseAmount(DiscountText) ?? 0;
+
+        public decimal? Amount => Fmt.ParseAmount(AmountText);
+
+        /// <summary>Indicative value for display; the saved value is computed (and rounded) by the server.</summary>
+        public decimal Value => Kind == InvoiceLineKind.Service
+            ? Amount ?? 0
+            : Math.Round((Quantity ?? 0) * (Rate ?? 0) * (100 - Discount) / 100, 2, MidpointRounding.AwayFromZero);
+
+        public bool IsComplete => Kind == InvoiceLineKind.Stock ? ItemId is not null && Quantity is > 0 : Amount is > 0 && LedgerId is not null;
+
+        public bool HasContent => ItemId is not null || !string.IsNullOrWhiteSpace(QuantityText) || !string.IsNullOrWhiteSpace(AmountText) || !string.IsNullOrWhiteSpace(Description);
+    }
+
+    private IReadOnlyList<VoucherTypeDto> _types = [];
+    private VoucherTypeDto? _type;
+    private IReadOnlyList<StockItemLookup> _items = [];
+    private IReadOnlyList<GodownDto> _godowns = [];
+    private IReadOnlyList<LedgerLookupItem> _itemLedgers = [];
+    private readonly List<LineModel> _lines = [];
+    private readonly List<VoucherDto> _recent = [];
+    private DateOnly _date;
+    private Guid? _party;
+    private string? _placeOfSupply;
+    private string? _reference;
+    private string? _narration;
+    private bool _roundOff = true;
+    private bool _showValidation;
+    private long? _expectedVersion;
+    private Guid _pendingId = Ids.New();
+    private InvoicePreview? _preview;
+    private List<int> _previewLineMap = [];
+    private string? _previewError;
+    private int _previewGeneration;
+    private IJSObjectReference? _module;
+    private ElementReference _container;
+    private bool _enterNavigation;
+    private bool _focusDate;
+
+    [Parameter]
+    public string? Slug { get; set; }
+
+    [Parameter]
+    public Guid? EditId { get; set; }
+
+    private bool IsOutward => _type?.BaseType is VoucherBaseType.Sales or VoucherBaseType.DebitNote;
+
+    private decimal LocalTaxable => _lines.Sum(l => l.Value);
+
+    private string Hint => _type?.BaseType switch
+    {
+        VoucherBaseType.Sales => "Goods go out of stock; the customer is debited, sales and output GST credited.",
+        VoucherBaseType.Purchase => "Goods come into stock at their taxable value; input GST and purchases debited, the supplier credited.",
+        VoucherBaseType.CreditNote => "Sales return: goods come back into stock at cost; the customer is credited.",
+        VoucherBaseType.DebitNote => "Purchase return: goods go back to the supplier at cost; the supplier is debited.",
+        _ => string.Empty,
+    };
+
+    private static bool IsPartyLedger(LedgerLookupItem l) =>
+        !l.Traits.HasFlag(LedgerTraits.SalesAccount) && !l.Traits.HasFlag(LedgerTraits.PurchaseAccount);
+
+    private static string ItemId(int index) => $"il{index}-item";
+
+    private static string QtyId(int index) => $"il{index}-qty";
+
+    private static string RateId(int index) => $"il{index}-rate";
+
+    private static string DiscId(int index) => $"il{index}-disc";
+
+    private static string AmountId(int index) => $"il{index}-amount";
+
+    private InvoicePreviewLine? PreviewFor(int index)
+    {
+        if (_preview is null || index >= _previewLineMap.Count)
+        {
+            return null;
+        }
+
+        var k = _previewLineMap[index];
+        return k >= 0 && k < _preview.Lines.Count ? _preview.Lines[k] : null;
+    }
+
+    private string? UnitOf(LineModel line) => line.ItemId is { } id ? _items.FirstOrDefault(i => i.Id == id)?.UnitSymbol : null;
+
+    private static string NatureLabel(InvoicePreview p) => p.SupplyNature switch
+    {
+        SupplyNature.InterState => $"Inter-State supply (IGST){(p.PlaceOfSupplyStateCode is { } s ? $" · place of supply {s}" : "")}",
+        SupplyNature.IntraStateUnionTerritory => "Within the Union Territory (CGST + UTGST)",
+        _ => "Within the State (CGST + SGST)",
+    };
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (!State.HasCompany)
+        {
+            return;
+        }
+
+        await RunAsync(async () =>
+        {
+            _types = (await Runner.RunAsync<VoucherService, IReadOnlyList<VoucherTypeDto>>(s => s.ListTypesAsync(State.CompanyId)))
+                .Where(t => t.IsActive && t.BaseType is VoucherBaseType.Sales or VoucherBaseType.Purchase or VoucherBaseType.CreditNote or VoucherBaseType.DebitNote)
+                .ToList();
+            var cache = await ItemCache.GetAsync(State.CompanyId);
+            _items = cache.Items;
+            _godowns = cache.Godowns;
+
+            if (EditId is { } id)
+            {
+                var voucher = await Runner.RunAsync<VoucherService, VoucherDto>(s => s.GetAsync(State.CompanyId, id));
+                if (voucher.Status != VoucherStatus.Draft || voucher.Invoice is not { } invoice)
+                {
+                    Nav.NavigateTo($"vouchers/{id}");
+                    return;
+                }
+
+                _type = _types.First(t => t.Id == voucher.VoucherTypeId);
+                _date = voucher.Date;
+                _party = invoice.PartyLedgerId;
+                _placeOfSupply = invoice.PlaceOfSupplyStateCode;
+                _reference = voucher.Reference;
+                _narration = voucher.Narration;
+                _expectedVersion = voucher.Version;
+                _roundOff = invoice.RoundOff != 0 || invoice.GrandTotal == decimal.Truncate(invoice.GrandTotal);
+                _lines.Clear();
+                _lines.AddRange(invoice.Lines.Select(l => new LineModel
+                {
+                    Kind = l.Kind,
+                    ItemId = l.StockItemId,
+                    GodownId = l.GodownId,
+                    LedgerId = l.LedgerId,
+                    Description = l.Description,
+                    QuantityText = l.Quantity == 0 ? string.Empty : l.Quantity.ToString("0.###", CultureInfo.InvariantCulture),
+                    RateText = l.Rate == 0 ? string.Empty : l.Rate.ToString("0.####", CultureInfo.InvariantCulture),
+                    DiscountText = l.DiscountPercent == 0 ? string.Empty : l.DiscountPercent.ToString("0.###", CultureInfo.InvariantCulture),
+                    AmountText = l.Kind == InvoiceLineKind.Service ? l.Taxable.ToString("0.00", CultureInfo.InvariantCulture) : string.Empty,
+                }));
+            }
+            else
+            {
+                var baseType = VoucherSlugs.Parse(Slug) ?? VoucherBaseType.Sales;
+                _type = _types.FirstOrDefault(t => t.BaseType == baseType && t.IsSystem) ?? _types.FirstOrDefault();
+                if (_date == default)
+                {
+                    _date = State.Today < State.Company!.BooksBeginningDate ? State.Company.BooksBeginningDate : State.Today;
+                }
+
+                StartLines();
+            }
+
+            await LoadItemLedgersAsync();
+            _focusDate = true;
+        });
+
+        await RefreshPreviewAsync();
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            _module = await JS.InvokeAsync<IJSObjectReference>("import", "./_content/TallyNext.UI/tallynext.js");
+        }
+
+        if (_module is not null && !_enterNavigation && _type is not null)
+        {
+            _enterNavigation = true;
+            await _module.InvokeVoidAsync("enableEnterNavigation", _container);
+        }
+
+        if (_focusDate && _module is not null && _type is not null)
+        {
+            _focusDate = false;
+            await _module.InvokeAsync<bool>("focus", "i-date");
+        }
+    }
+
+    protected override async Task<bool> HandleShortcutAsync(string key)
+    {
+        switch (key)
+        {
+            case "Ctrl+S" or "Ctrl+Enter":
+                await InvokeAsync(() => SaveAsync(post: true));
+                return true;
+            case "Ctrl+H" when EditId is null && _type is not null:
+                Nav.NavigateTo($"vouchers/new/{VoucherSlugs.Of(_type.BaseType)}");
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    private async Task LoadItemLedgersAsync()
+    {
+        var trait = _type?.BaseType is VoucherBaseType.Sales or VoucherBaseType.CreditNote ? LedgerTraits.SalesAccount : LedgerTraits.PurchaseAccount;
+        _itemLedgers = (await LedgerCache.GetAsync(State.CompanyId)).Where(l => l.Traits.HasFlag(trait)).ToList();
+    }
+
+    private void StartLines()
+    {
+        _lines.Clear();
+        _lines.Add(NewLine(InvoiceLineKind.Stock));
+        _showValidation = false;
+        _preview = null;
+        _previewError = null;
+    }
+
+    private LineModel NewLine(InvoiceLineKind kind) => new()
+    {
+        Kind = kind,
+        GodownId = _godowns.FirstOrDefault(g => g.IsSystem)?.Id ?? _godowns.FirstOrDefault()?.Id,
+        LedgerId = kind == InvoiceLineKind.Service ? _itemLedgers.FirstOrDefault()?.Id : null,
+    };
+
+    private async Task ChangeTypeAsync(ChangeEventArgs e)
+    {
+        if (Guid.TryParse(e.Value?.ToString(), out var id) && _types.FirstOrDefault(t => t.Id == id) is { } type)
+        {
+            _type = type;
+            Nav.NavigateTo($"invoices/new/{VoucherSlugs.Of(type.BaseType)}", replace: true);
+            await LoadItemLedgersAsync();
+            foreach (var line in _lines)
+            {
+                line.LedgerId = line.Kind == InvoiceLineKind.Service ? _itemLedgers.FirstOrDefault()?.Id : null;
+            }
+
+            await RefreshPreviewAsync();
+            await FocusAsync("i-date");
+        }
+    }
+
+    private async Task SetDateAsync(ChangeEventArgs e)
+    {
+        if (DateOnly.TryParse(e.Value?.ToString(), CultureInfo.InvariantCulture, out var d))
+        {
+            _date = d;
+            await RefreshPreviewAsync();
+        }
+    }
+
+    private async Task PartyChosenAsync(Guid? id)
+    {
+        _party = id;
+        await RefreshPreviewAsync();
+    }
+
+    private async Task SetPlaceOfSupplyAsync(ChangeEventArgs e)
+    {
+        var value = e.Value?.ToString();
+        _placeOfSupply = string.IsNullOrEmpty(value) ? null : value;
+        await RefreshPreviewAsync();
+    }
+
+    private async Task ItemChosenAsync(int index, Guid? id)
+    {
+        _lines[index].ItemId = id;
+        await RefreshPreviewAsync();
+    }
+
+    private async Task SetGodownAsync(LineModel line, object? value)
+    {
+        line.GodownId = Guid.TryParse(value?.ToString(), out var g) ? g : null;
+        await RefreshPreviewAsync();
+    }
+
+    private async Task SetLedgerAsync(LineModel line, object? value)
+    {
+        line.LedgerId = Guid.TryParse(value?.ToString(), out var l) ? l : null;
+        await RefreshPreviewAsync();
+    }
+
+    private async Task ToggleKind(int index)
+    {
+        var line = _lines[index];
+        var replacement = NewLine(line.Kind == InvoiceLineKind.Stock ? InvoiceLineKind.Service : InvoiceLineKind.Stock);
+        _lines[index] = replacement;
+        await RefreshPreviewAsync();
+    }
+
+    private async Task RemoveAsync(int index)
+    {
+        if (_lines.Count > 1)
+        {
+            _lines.RemoveAt(index);
+            await RefreshPreviewAsync();
+        }
+    }
+
+    private async Task AddLineAsync(InvoiceLineKind kind)
+    {
+        _lines.Add(NewLine(kind));
+        StateHasChanged();
+        await FocusAsync(ItemId(_lines.Count - 1));
+    }
+
+    /// <summary>Enter on the last field of the last line starts a new line once that line is complete.</summary>
+    private async Task LastFieldKeyDownAsync(KeyboardEventArgs e, int index)
+    {
+        if (e.Key != "Enter" || index != _lines.Count - 1)
+        {
+            return;
+        }
+
+        if (_lines[index].IsComplete)
+        {
+            await RefreshPreviewAsync();
+            await AddLineAsync(InvoiceLineKind.Stock);
+        }
+    }
+
+    /// <summary>Enter on an empty item field ends line entry (moves to the narration) once a line exists.</summary>
+    private Task EmptyItemEnterAsync(int index) => index > 0 ? FocusAsync("i-narration") : Task.CompletedTask;
+
+    private async Task NarrationKeyDownAsync(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter" && !e.ShiftKey && !e.CtrlKey && !e.AltKey && !e.MetaKey)
+        {
+            await SaveAsync(post: true);
+        }
+    }
+
+    private async Task FocusAsync(string id)
+    {
+        if (_module is not null)
+        {
+            await Task.Yield();
+            await _module.InvokeAsync<bool>("focus", id);
+        }
+    }
+
+    private InvoiceRequest? BuildRequest(bool post, out string? problem)
+    {
+        problem = null;
+        if (_type is null)
+        {
+            return null;
+        }
+
+        if (_party is null)
+        {
+            problem = $"Choose the {(IsOutward ? "customer" : "supplier")}.";
+            return null;
+        }
+
+        var filled = _lines.Where(l => l.HasContent).ToList();
+        if (filled.Count == 0)
+        {
+            problem = "Add at least one item or service line.";
+            return null;
+        }
+
+        if (filled.FirstOrDefault(l => !l.IsComplete) is { } incomplete)
+        {
+            var number = _lines.IndexOf(incomplete) + 1;
+            problem = incomplete.Kind == InvoiceLineKind.Stock
+                ? $"Line {number}: choose the item and enter a quantity."
+                : $"Line {number}: choose the ledger and enter the amount.";
+            return null;
+        }
+
+        return new InvoiceRequest
+        {
+            Id = EditId is null ? _pendingId : null,
+            VoucherTypeId = _type.Id,
+            Date = _date,
+            PartyLedgerId = _party.Value,
+            PlaceOfSupplyStateCode = _placeOfSupply,
+            Reference = _reference,
+            Narration = _narration,
+            RoundOff = _roundOff,
+            Post = post,
+            ExpectedVersion = _expectedVersion,
+            Lines = filled.Select(l => new InvoiceRequestLine
+            {
+                Kind = l.Kind,
+                StockItemId = l.Kind == InvoiceLineKind.Stock ? l.ItemId : null,
+                GodownId = l.Kind == InvoiceLineKind.Stock ? l.GodownId : null,
+                LedgerId = l.LedgerId,
+                Description = l.Description,
+                Quantity = l.Kind == InvoiceLineKind.Stock ? l.Quantity ?? 0 : 0,
+                Rate = l.Kind == InvoiceLineKind.Stock ? l.Rate ?? 0 : 0,
+                DiscountPercent = l.Kind == InvoiceLineKind.Stock ? l.Discount : 0,
+                Amount = l.Kind == InvoiceLineKind.Service ? l.Amount : null,
+            }).ToList(),
+        };
+    }
+
+    /// <summary>Asks the application for tax and totals (the same computation used when saving).</summary>
+    private async Task RefreshPreviewAsync()
+    {
+        var generation = ++_previewGeneration;
+        var request = BuildRequest(post: false, out var problem);
+        if (request is null)
+        {
+            _preview = null;
+            _previewError = problem;
+            return;
+        }
+
+        var map = _lines.Select((l, i) => (l, i)).Where(x => x.l.HasContent).Select(x => x.i).ToList();
+        try
+        {
+            var preview = await Runner.RunAsync<InvoiceService, InvoicePreview>(s => s.PreviewAsync(State.CompanyId, request));
+            if (generation == _previewGeneration)
+            {
+                _preview = preview;
+                _previewError = null;
+                _previewLineMap = Enumerable.Range(0, _lines.Count).Select(i => map.IndexOf(i)).ToList();
+            }
+        }
+        catch (Exception ex)
+        {
+            if (generation == _previewGeneration)
+            {
+                _preview = null;
+                _previewError = UiErrors.Message(ex, LoggerFactory.CreateLogger(GetType()));
+            }
+        }
+    }
+
+    private async Task SaveAsync(bool post)
+    {
+        if (Busy || _type is null)
+        {
+            return;
+        }
+
+        _showValidation = true;
+        Notice = null;
+        var request = BuildRequest(post, out var problem);
+        if (request is null)
+        {
+            Error = problem;
+            return;
+        }
+
+        VoucherDto? saved = null;
+        var ok = await RunAsync(async () =>
+        {
+            saved = EditId is { } id
+                ? await Runner.RunAsync<InvoiceService, VoucherDto>(s => s.UpdateDraftAsync(State.CompanyId, id, request))
+                : await Runner.RunAsync<InvoiceService, VoucherDto>(s => s.CreateAsync(State.CompanyId, request));
+        });
+
+        if (!ok || saved is null)
+        {
+            return;
+        }
+
+        if (Services.GetService(typeof(ISyncPanel)) is ISyncPanel sync)
+        {
+            await sync.RefreshAsync();
+        }
+
+        if (EditId is not null)
+        {
+            Nav.NavigateTo($"vouchers/{saved.Id}");
+            return;
+        }
+
+        Notice = $"Saved {saved.VoucherTypeName} {saved.Number ?? "(draft)"} dated {Fmt.Date(saved.Date)} for {Fmt.AmountOrZero(saved.Invoice?.GrandTotal ?? saved.Total)}.";
+        _recent.Insert(0, saved);
+        if (_recent.Count > 10)
+        {
+            _recent.RemoveAt(_recent.Count - 1);
+        }
+
+        _pendingId = Ids.New();
+        _reference = null;
+        _narration = null;
+        _party = null;
+        _placeOfSupply = null;
+        StartLines();
+        _focusDate = true;
+    }
+
+    private Task ResetAsync()
+    {
+        _pendingId = Ids.New();
+        _reference = null;
+        _narration = null;
+        _party = null;
+        _placeOfSupply = null;
+        Error = null;
+        Notice = null;
+        StartLines();
+        return FocusAsync("i-date");
+    }
+
+    public override void Dispose()
+    {
+        base.Dispose();
+        _ = _module?.DisposeAsync().AsTask().ContinueWith(_ => { }, TaskScheduler.Default);
+    }
+}

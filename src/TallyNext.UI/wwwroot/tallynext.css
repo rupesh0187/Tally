@@ -125,6 +125,18 @@ table.data td.indent-1 { padding-left: 1.6rem; } table.data td.indent-2 { paddin
 .totals .diff { color: var(--tn-bad); font-weight: 600; }
 .totals .balanced { color: var(--tn-ok); font-weight: 600; }
 
+/* ---------- item invoice ---------- */
+.voucher.invoice { max-width: 1320px; container-type: inline-size; }
+.invoice-head { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: .75rem; align-items: end; }
+.invoice-lines .line { grid-template-columns: 56px minmax(200px, 1fr) 130px 90px 105px 70px 160px 110px 110px 34px; }
+/* Narrow windows: each line wraps onto two rows (item, godown, qty, rate / discount, ledger, value, tax). */
+@container (max-width: 1150px) {
+  .invoice-lines .line { grid-template-columns: 70px minmax(160px, 1fr) 130px 100px 110px; row-gap: .35rem; }
+}
+.invoice-lines .side-toggle { width: 50px; }
+.invoice-summary { display: grid; grid-template-columns: 1fr 340px; gap: 1rem; margin-top: 1rem; align-items: start; }
+.invoice-summary table.data td:last-child { width: 150px; }
+
 /* ---------- picker ---------- */
 .picker { position: relative; }
 .picker .input { width: 100%; }
@@ -144,7 +156,8 @@ table.data td.indent-1 { padding-left: 1.6rem; } table.data td.indent-2 { paddin
   .tn-shell { grid-template-columns: 1fr; grid-template-rows: auto auto 1fr; }
   .tn-sidebar { grid-row: auto; }
   .tn-topbar, .tn-main { grid-column: 1; }
-  .grid.cols-2, .grid.cols-3, .grid.cols-4, .statement, .voucher-head { grid-template-columns: 1fr; }
+  .grid.cols-2, .grid.cols-3, .grid.cols-4, .statement, .voucher-head, .invoice-head, .invoice-summary { grid-template-columns: 1fr; }
+  .invoice-lines .line { grid-template-columns: 1fr 1fr; }
 }
 
 @media print {

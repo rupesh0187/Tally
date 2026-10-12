@@ -116,7 +116,15 @@ namespace TallyNext.Infrastructure.Local.Persistence.Migrations
                     b.Property<Guid>("GroupId")
                         .HasColumnType("TEXT");
 
+                    b.Property<string>("GstRates")
+                        .IsRequired()
+                        .HasColumnType("TEXT")
+                        .HasColumnName("GstRatesJson");
+
                     b.Property<byte>("GstRegistrationType")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<byte>("GstTaxType")
                         .HasColumnType("INTEGER");
 
                     b.Property<string>("Gstin")
@@ -310,6 +318,9 @@ namespace TallyNext.Infrastructure.Local.Persistence.Migrations
                     b.Property<int>("FinancialYearStartMonth")
                         .HasColumnType("INTEGER");
 
+                    b.Property<byte>("GstRegistration")
+                        .HasColumnType("INTEGER");
+
                     b.Property<string>("Gstin")
                         .HasMaxLength(15)
                         .HasColumnType("TEXT");
@@ -412,6 +423,175 @@ namespace TallyNext.Infrastructure.Local.Persistence.Migrations
                     b.ToTable("CompanyMemberships", (string)null);
                 });
 
+            modelBuilder.Entity("TallyNext.Domain.Inventory.Godown", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid>("CompanyId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("CreatedAtUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<bool>("IsDeleted")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<bool>("IsSystem")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("NormalizedName")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("UpdatedAtUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid?>("UpdatedByUserId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<long>("Version")
+                        .IsConcurrencyToken()
+                        .HasColumnType("INTEGER");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("CompanyId", "NormalizedName")
+                        .HasFilter("\"IsDeleted\" = FALSE");
+
+                    b.ToTable("Godowns", (string)null);
+                });
+
+            modelBuilder.Entity("TallyNext.Domain.Inventory.StockItem", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Alias")
+                        .HasMaxLength(100)
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid>("CompanyId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("CreatedAtUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("GstRates")
+                        .IsRequired()
+                        .HasColumnType("TEXT")
+                        .HasColumnName("GstRatesJson");
+
+                    b.Property<bool>("IsDeleted")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("NormalizedName")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid?>("OpeningGodownId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<long>("OpeningQuantityMilli")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<long>("OpeningValueMinor")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("PartNumber")
+                        .HasMaxLength(50)
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid>("UnitId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("UpdatedAtUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid?>("UpdatedByUserId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<byte>("ValuationMethod")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<long>("Version")
+                        .IsConcurrencyToken()
+                        .HasColumnType("INTEGER");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("OpeningGodownId");
+
+                    b.HasIndex("UnitId");
+
+                    b.HasIndex("CompanyId", "NormalizedName")
+                        .HasFilter("\"IsDeleted\" = FALSE");
+
+                    b.ToTable("StockItems", (string)null);
+                });
+
+            modelBuilder.Entity("TallyNext.Domain.Inventory.UnitOfMeasure", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid>("CompanyId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("CreatedAtUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("DecimalPlaces")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<bool>("IsDeleted")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("NormalizedSymbol")
+                        .IsRequired()
+                        .HasMaxLength(10)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Symbol")
+                        .IsRequired()
+                        .HasMaxLength(10)
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("UpdatedAtUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid?>("UpdatedByUserId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<long>("Version")
+                        .IsConcurrencyToken()
+                        .HasColumnType("INTEGER");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("CompanyId", "NormalizedSymbol")
+                        .HasFilter("\"IsDeleted\" = FALSE");
+
+                    b.ToTable("Units", (string)null);
+                });
+
             modelBuilder.Entity("TallyNext.Domain.Vouchers.Voucher", b =>
                 {
                     b.Property<Guid>("Id")
@@ -453,6 +633,13 @@ namespace TallyNext.Infrastructure.Local.Persistence.Migrations
                         .HasMaxLength(40)
                         .HasColumnType("TEXT");
 
+                    b.Property<Guid?>("PartyLedgerId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("PlaceOfSupplyStateCode")
+                        .HasMaxLength(2)
+                        .HasColumnType("TEXT");
+
                     b.Property<DateTime?>("PostedAtUtc")
                         .HasColumnType("TEXT");
 
@@ -479,6 +666,9 @@ namespace TallyNext.Infrastructure.Local.Persistence.Migrations
                     b.Property<byte>("Status")
                         .HasColumnType("INTEGER");
 
+                    b.Property<byte?>("SupplyNature")
+                        .HasColumnType("INTEGER");
+
                     b.Property<long>("TotalMinor")
                         .HasColumnType("INTEGER");
 
@@ -497,6 +687,8 @@ namespace TallyNext.Infrastructure.Local.Persistence.Migrations
 
                     b.HasKey("Id");
 
+                    b.HasIndex("PartyLedgerId");
+
                     b.HasIndex("ReversalOfVoucherId")
                         .HasFilter("\"ReversalOfVoucherId\" IS NOT NULL");
 
@@ -511,6 +703,100 @@ namespace TallyNext.Infrastructure.Local.Persistence.Migrations
                         .HasFilter("\"SequenceNumber\" IS NOT NULL");
 
                     b.ToTable("Vouchers", (string)null);
+                });
+
+            modelBuilder.Entity("TallyNext.Domain.Vouchers.VoucherItemLine", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("CessMilliPercent")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<long>("CessMinor")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<long>("CgstMinor")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<Guid>("CompanyId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Description")
+                        .HasMaxLength(500)
+                        .HasColumnType("TEXT");
+
+                    b.Property<byte>("Direction")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("DiscountMilliPercent")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<Guid?>("GodownId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("HsnSac")
+                        .HasMaxLength(8)
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("IgstMilliPercent")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<long>("IgstMinor")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<bool>("IsPosted")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<byte>("Kind")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<Guid>("LedgerId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("LineNo")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<long>("QuantityMilli")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<long>("RateScaled")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<long>("StateTaxMinor")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<Guid?>("StockItemId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<byte>("Taxability")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<long>("TaxableMinor")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<DateOnly>("VoucherDate")
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid>("VoucherId")
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("GodownId");
+
+                    b.HasIndex("LedgerId");
+
+                    b.HasIndex("StockItemId");
+
+                    b.HasIndex("CompanyId", "VoucherDate");
+
+                    b.HasIndex("VoucherId", "LineNo")
+                        .IsUnique();
+
+                    b.HasIndex("CompanyId", "StockItemId", "VoucherDate");
+
+                    b.ToTable("VoucherItemLines", (string)null);
                 });
 
             modelBuilder.Entity("TallyNext.Domain.Vouchers.VoucherLine", b =>
@@ -979,6 +1265,44 @@ namespace TallyNext.Infrastructure.Local.Persistence.Migrations
                         .IsRequired();
                 });
 
+            modelBuilder.Entity("TallyNext.Domain.Inventory.Godown", b =>
+                {
+                    b.HasOne("TallyNext.Domain.Companies.Company", null)
+                        .WithMany()
+                        .HasForeignKey("CompanyId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("TallyNext.Domain.Inventory.StockItem", b =>
+                {
+                    b.HasOne("TallyNext.Domain.Companies.Company", null)
+                        .WithMany()
+                        .HasForeignKey("CompanyId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("TallyNext.Domain.Inventory.Godown", null)
+                        .WithMany()
+                        .HasForeignKey("OpeningGodownId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.HasOne("TallyNext.Domain.Inventory.UnitOfMeasure", null)
+                        .WithMany()
+                        .HasForeignKey("UnitId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("TallyNext.Domain.Inventory.UnitOfMeasure", b =>
+                {
+                    b.HasOne("TallyNext.Domain.Companies.Company", null)
+                        .WithMany()
+                        .HasForeignKey("CompanyId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+                });
+
             modelBuilder.Entity("TallyNext.Domain.Vouchers.Voucher", b =>
                 {
                     b.HasOne("TallyNext.Domain.Companies.Company", null)
@@ -986,6 +1310,11 @@ namespace TallyNext.Infrastructure.Local.Persistence.Migrations
                         .HasForeignKey("CompanyId")
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired();
+
+                    b.HasOne("TallyNext.Domain.Accounts.Ledger", null)
+                        .WithMany()
+                        .HasForeignKey("PartyLedgerId")
+                        .OnDelete(DeleteBehavior.Restrict);
 
                     b.HasOne("TallyNext.Domain.Vouchers.Voucher", null)
                         .WithMany()
@@ -996,6 +1325,31 @@ namespace TallyNext.Infrastructure.Local.Persistence.Migrations
                         .WithMany()
                         .HasForeignKey("VoucherTypeId")
                         .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("TallyNext.Domain.Vouchers.VoucherItemLine", b =>
+                {
+                    b.HasOne("TallyNext.Domain.Inventory.Godown", null)
+                        .WithMany()
+                        .HasForeignKey("GodownId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.HasOne("TallyNext.Domain.Accounts.Ledger", null)
+                        .WithMany()
+                        .HasForeignKey("LedgerId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("TallyNext.Domain.Inventory.StockItem", null)
+                        .WithMany()
+                        .HasForeignKey("StockItemId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.HasOne("TallyNext.Domain.Vouchers.Voucher", null)
+                        .WithMany("ItemLines")
+                        .HasForeignKey("VoucherId")
+                        .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
                 });
 
@@ -1034,6 +1388,8 @@ namespace TallyNext.Infrastructure.Local.Persistence.Migrations
 
             modelBuilder.Entity("TallyNext.Domain.Vouchers.Voucher", b =>
                 {
+                    b.Navigation("ItemLines");
+
                     b.Navigation("Lines");
                 });
 #pragma warning restore 612, 618

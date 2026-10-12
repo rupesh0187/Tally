@@ -1,0 +1,162 @@
+@page "/inventory/units-godowns"
+@inherits AppPage
+@inject StockItemCache ItemCache
+
+<PageTitle>Units &amp; godowns — TallyNext</PageTitle>
+
+<div class="page-head">
+    <div><h1>Units &amp; godowns</h1><div class="muted">Units of measure and storage locations</div></div>
+    <a class="btn" href="inventory/items">Stock items</a>
+</div>
+<Alerts Error="@Error" Notice="@Notice" />
+@if (_loaded && State.Can(Permission.MasterEdit) && (_units.Count == 0 || !_godowns.Any(g => g.IsSystem)))
+{
+    <div class="alert warn">
+        This company has no @(_units.Count == 0 ? "units of measure" : "main location") yet (it was created before inventory was available).
+        <button class="btn small" disabled="@Busy" @onclick="CreateDefaultsAsync">Create default unit and Main Location</button>
+    </div>
+}
+
+<div class="grid cols-2">
+    <div class="card">
+        <h2 style="margin-top:0">Units of measure</h2>
+        <table class="data">
+            <thead><tr><th>Symbol</th><th>Name</th><th class="num">Decimals</th><th></th></tr></thead>
+            <tbody>
+                @foreach (var u in _units)
+                {
+                    <tr>
+                        <td class="mono">@u.Symbol</td><td>@u.Name</td><td class="num">@u.DecimalPlaces</td>
+                        <td>@if (State.Can(Permission.MasterEdit)) { <button class="btn small" @onclick="() => EditUnit(u)">Edit</button> }</td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+        @if (State.Can(Permission.MasterEdit))
+        {
+            <h2>@(_unitId is null ? "New unit" : "Edit unit")</h2>
+            <div class="toolbar">
+                <label class="field">Symbol <input class="input mono" style="width:7rem" maxlength="10" @bind="_unit.Symbol" /></label>
+                <label class="field">Name <input class="input" maxlength="100" @bind="_unit.Name" /></label>
+                <label class="field">Decimals
+                    <select class="input" @bind="_unit.DecimalPlaces">
+                        @for (var d = 0; d <= 3; d++)
+                        {
+                            <option value="@d">@d</option>
+                        }
+                    </select>
+                </label>
+                <button class="btn primary" disabled="@Busy" @onclick="SaveUnitAsync">Save unit</button>
+                @if (_unitId is not null)
+                {
+                    <button class="btn" @onclick="NewUnit">Cancel</button>
+                }
+            </div>
+        }
+    </div>
+
+    <div class="card">
+        <h2 style="margin-top:0">Godowns</h2>
+        <table class="data">
+            <thead><tr><th>Name</th><th></th></tr></thead>
+            <tbody>
+                @foreach (var g in _godowns)
+                {
+                    <tr>
+                        <td>@g.Name @if (g.IsSystem) { <span class="tag">predefined</span> }</td>
+                        <td>@if (State.Can(Permission.MasterEdit)) { <button class="btn small" @onclick="() => EditGodown(g)">Rename</button> }</td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+        @if (State.Can(Permission.MasterEdit))
+        {
+            <h2>@(_godownId is null ? "New godown" : "Rename godown")</h2>
+            <div class="toolbar">
+                <label class="field">Name <input class="input" maxlength="100" @bind="_godown.Name" /></label>
+                <button class="btn primary" disabled="@Busy" @onclick="SaveGodownAsync">Save godown</button>
+                @if (_godownId is not null)
+                {
+                    <button class="btn" @onclick="NewGodown">Cancel</button>
+                }
+            </div>
+        }
+    </div>
+</div>
+
+@code {
+    private IReadOnlyList<UnitDto> _units = [];
+    private IReadOnlyList<GodownDto> _godowns = [];
+    private UnitInput _unit = new() { Id = Ids.New() };
+    private Guid? _unitId;
+    private GodownInput _godown = new() { Id = Ids.New() };
+    private Guid? _godownId;
+    private bool _loaded;
+
+    protected override Task OnInitializedAsync() => State.HasCompany ? LoadAsync() : Task.CompletedTask;
+
+    private Task LoadAsync() => RunAsync(async () =>
+    {
+        _units = await Runner.RunAsync<InventoryService, IReadOnlyList<UnitDto>>(s => s.ListUnitsAsync(State.CompanyId));
+        _godowns = await Runner.RunAsync<InventoryService, IReadOnlyList<GodownDto>>(s => s.ListGodownsAsync(State.CompanyId));
+        _loaded = true;
+    });
+
+    private async Task CreateDefaultsAsync()
+    {
+        if (await RunAsync(() => Runner.RunAsync<InventoryService, bool>(s => s.EnsureDefaultsAsync(State.CompanyId))))
+        {
+            ItemCache.Invalidate();
+            Notice = "Default unit and Main Location created.";
+            await LoadAsync();
+        }
+    }
+
+    private void EditUnit(UnitDto u)
+    {
+        _unitId = u.Id;
+        _unit = new UnitInput { Symbol = u.Symbol, Name = u.Name, DecimalPlaces = u.DecimalPlaces };
+    }
+
+    private void NewUnit()
+    {
+        _unitId = null;
+        _unit = new UnitInput { Id = Ids.New() };
+    }
+
+    private void EditGodown(GodownDto g)
+    {
+        _godownId = g.Id;
+        _godown = new GodownInput { Name = g.Name };
+    }
+
+    private void NewGodown()
+    {
+        _godownId = null;
+        _godown = new GodownInput { Id = Ids.New() };
+    }
+
+    private async Task SaveUnitAsync()
+    {
+        var id = _unitId;
+        if (await RunAsync(() => Runner.RunAsync<InventoryService, UnitDto>(s => s.SaveUnitAsync(State.CompanyId, id, _unit))))
+        {
+            Notice = $"Unit '{_unit.Symbol}' saved.";
+            ItemCache.Invalidate();
+            NewUnit();
+            await LoadAsync();
+        }
+    }
+
+    private async Task SaveGodownAsync()
+    {
+        var id = _godownId;
+        if (await RunAsync(() => Runner.RunAsync<InventoryService, GodownDto>(s => s.SaveGodownAsync(State.CompanyId, id, _godown))))
+        {
+            Notice = $"Godown '{_godown.Name}' saved.";
+            ItemCache.Invalidate();
+            NewGodown();
+            await LoadAsync();
+        }
+    }
+}

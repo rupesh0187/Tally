@@ -1,0 +1,81 @@
+@page "/inventory/items"
+@inherits AppPage
+@inject StockItemCache ItemCache
+
+<PageTitle>Stock items — TallyNext</PageTitle>
+
+<div class="page-head">
+    <div><h1>Stock items</h1><div class="muted">@_items.Count items</div></div>
+    <div class="toolbar">
+        <label class="field">Search <input class="input" placeholder="Name, alias or part no." @bind="_search" @bind:event="oninput" @bind:after="LoadAsync" autofocus /></label>
+        <a class="btn" href="inventory/units-godowns">Units &amp; godowns</a>
+        @if (State.Can(Permission.MasterEdit))
+        {
+            <a class="btn primary" href="inventory/items/new">New item</a>
+        }
+    </div>
+</div>
+<Alerts Error="@Error" Notice="@Notice" />
+@if (_loaded && State.Can(Permission.MasterEdit) && (_units.Count == 0 || !_godowns.Any(g => g.IsSystem)))
+{
+    <div class="alert warn">
+        This company has no @(_units.Count == 0 ? "units of measure" : "main location") yet (it was created before inventory was available).
+        <button class="btn small" disabled="@Busy" @onclick="CreateDefaultsAsync">Create default unit and Main Location</button>
+    </div>
+}
+
+<table class="data">
+    <thead><tr><th>Item</th><th>Unit</th><th>Valuation</th><th>GST (current)</th><th>HSN/SAC</th><th class="num">Opening qty</th><th class="num">Opening value</th></tr></thead>
+    <tbody>
+        @foreach (var i in _items)
+        {
+            var rate = i.GstRates.LastOrDefault(r => r.EffectiveFrom <= State.Today) ?? i.GstRates.FirstOrDefault();
+            <tr class="clickable" @onclick='() => Nav.NavigateTo($"inventory/items/{i.Id}")'>
+                <td>@i.Name @if (!string.IsNullOrEmpty(i.Alias)) { <span class="muted small">(@i.Alias)</span> } @if (!string.IsNullOrEmpty(i.PartNumber)) { <span class="muted small mono">@i.PartNumber</span> }</td>
+                <td>@i.UnitSymbol</td>
+                <td>@(i.ValuationMethod == ValuationMethod.Fifo ? "FIFO" : "Weighted average")</td>
+                <td>@(rate?.ToString() ?? "—")</td>
+                <td class="mono">@rate?.HsnSac</td>
+                <td class="num">@(i.OpeningQuantity == 0 ? "" : $"{i.OpeningQuantity:0.###} {i.UnitSymbol}")</td>
+                <td class="num">@Fmt.Amount(i.OpeningValue)</td>
+            </tr>
+        }
+    </tbody>
+</table>
+
+@code {
+    private IReadOnlyList<StockItemDto> _items = [];
+    private IReadOnlyList<UnitDto> _units = [];
+    private IReadOnlyList<GodownDto> _godowns = [];
+    private string? _search;
+    private bool _loaded;
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (!State.HasCompany)
+        {
+            return;
+        }
+
+        await RunAsync(async () =>
+        {
+            _units = await Runner.RunAsync<InventoryService, IReadOnlyList<UnitDto>>(s => s.ListUnitsAsync(State.CompanyId));
+            _godowns = await Runner.RunAsync<InventoryService, IReadOnlyList<GodownDto>>(s => s.ListGodownsAsync(State.CompanyId));
+            _loaded = true;
+        });
+        await LoadAsync();
+    }
+
+    private async Task CreateDefaultsAsync()
+    {
+        if (await RunAsync(() => Runner.RunAsync<InventoryService, bool>(s => s.EnsureDefaultsAsync(State.CompanyId))))
+        {
+            ItemCache.Invalidate();
+            Notice = "Default unit and Main Location created.";
+            await OnInitializedAsync();
+        }
+    }
+
+    private Task LoadAsync() => RunAsync(async () =>
+        _items = await Runner.RunAsync<InventoryService, IReadOnlyList<StockItemDto>>(s => s.ListItemsAsync(State.CompanyId, _search)));
+}

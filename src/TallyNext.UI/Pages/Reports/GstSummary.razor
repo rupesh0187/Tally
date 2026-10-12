@@ -1,0 +1,64 @@
+@page "/reports/gst-summary"
+@inherits AppPage
+
+<PageTitle>GST Summary — TallyNext</PageTitle>
+
+<div class="page-head">
+    <div><h1>GST Summary</h1><div class="muted">@Fmt.Date(_from) to @Fmt.Date(_to)</div></div>
+    <PeriodBar From="_from" To="_to" Year="State.CurrentYear" OnChange="ApplyAsync" />
+</div>
+<Alerts Error="@Error" />
+
+<div class="alert warn">
+    This summary is an aid for preparing returns. It is not a GST return and has not been verified against GST law or the GST portal;
+    reverse charge, exports with payment of tax and other special cases are not included. Check the figures with your tax adviser.
+</div>
+
+@if (_report is { } r)
+{
+    <div class="grid cols-3" style="margin-bottom:1rem">
+        <div class="card stat"><div class="label">Output tax (sales less credit notes)</div><div class="value">@Fmt.AmountOrZero(r.OutputTax)</div></div>
+        <div class="card stat"><div class="label">Input tax (purchases less debit notes)</div><div class="value">@Fmt.AmountOrZero(r.InputTax)</div></div>
+        <div class="card stat"><div class="label">@(r.NetPayable >= 0 ? "Net tax payable" : "Excess input tax")</div><div class="value">@Fmt.AmountOrZero(Math.Abs(r.NetPayable))</div></div>
+    </div>
+
+    <h2>Outward supplies</h2>
+    <GstSummaryTable Rows="r.Outward" />
+    <h2>Inward supplies</h2>
+    <GstSummaryTable Rows="r.Inward" />
+    <p class="muted small">Amounts are net of credit and debit notes and of reversed invoices. Rows are grouped by taxability, rate and supply type of each invoice line.</p>
+}
+
+@code {
+    private DateOnly _from;
+    private DateOnly _to;
+    private GstSummaryReport? _report;
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (!State.HasCompany)
+        {
+            return;
+        }
+
+        var today = State.Today;
+        _from = new DateOnly(today.Year, today.Month, 1);
+        if (_from < State.PeriodStart)
+        {
+            _from = State.PeriodStart;
+        }
+
+        _to = _from.AddMonths(1).AddDays(-1);
+        await LoadAsync();
+    }
+
+    private Task ApplyAsync((DateOnly From, DateOnly To) range)
+    {
+        (_from, _to) = range;
+        return LoadAsync();
+    }
+
+    private Task LoadAsync() => RunAsync(async () =>
+        _report = await Runner.RunAsync<ReportService, GstSummaryReport>(s => s.GstSummaryAsync(State.CompanyId, _from, _to)));
+
+}

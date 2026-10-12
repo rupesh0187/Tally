@@ -1,5 +1,6 @@
 using TallyNext.Domain.Common;
 using TallyNext.Domain.Companies;
+using TallyNext.Domain.Tax;
 
 namespace TallyNext.Domain.Accounts;
 
@@ -28,7 +29,9 @@ public sealed record LedgerDetails(
     string? Pincode = null,
     string? Email = null,
     string? Phone = null,
-    int? CreditPeriodDays = null);
+    int? CreditPeriodDays = null,
+    GstTaxType GstTaxType = GstTaxType.None,
+    IReadOnlyList<GstRateEntry>? GstRates = null);
 
 /// <summary>
 /// An account in the books. Opening balances are as at the company's books-beginning date and are only
@@ -78,6 +81,12 @@ public sealed class Ledger : CompanyScopedEntity
     public string? Phone { get; private set; }
 
     public int? CreditPeriodDays { get; private set; }
+
+    /// <summary>For duty ledgers (under Duties &amp; Taxes): the GST head they accumulate.</summary>
+    public GstTaxType GstTaxType { get; private set; }
+
+    /// <summary>Effective-dated GST rates used when this ledger is billed directly (services, non-stock income).</summary>
+    public IReadOnlyList<GstRateEntry> GstRates { get; private set; } = [];
 
     public bool IsSystem => SystemKey is not null;
 
@@ -146,7 +155,9 @@ public sealed class Ledger : CompanyScopedEntity
     }
 
     public LedgerDetails GetDetails() => new(
-        Alias, IsBillWise, GstRegistrationType, Gstin, StateCode, Pan, AddressLine1, AddressLine2, City, Pincode, Email, Phone, CreditPeriodDays);
+        Alias, IsBillWise, GstRegistrationType, Gstin, StateCode, Pan, AddressLine1, AddressLine2, City, Pincode, Email, Phone, CreditPeriodDays, GstTaxType, GstRates);
+
+    public GstRateEntry? GstRateOn(DateOnly date) => GstRateSchedule.Resolve(GstRates, date);
 
     private void SetName(string name)
     {
@@ -217,6 +228,16 @@ public sealed class Ledger : CompanyScopedEntity
             throw new DomainException("ledger.gst_registration_invalid", "The GST registration type is not valid.");
         }
 
+        if (!Enum.IsDefined(details.GstTaxType))
+        {
+            throw new DomainException("ledger.gst_tax_type_invalid", "The GST tax type is not valid.");
+        }
+
+        if (details.GstTaxType != GstTaxType.None && details.GstRates is { Count: > 0 })
+        {
+            throw new DomainException("ledger.gst_rates_on_duty_ledger", "A tax ledger cannot carry its own GST rate.");
+        }
+
         Alias = NameRules.CleanOptional(details.Alias, NameRules.MaxLength, "alias");
         IsBillWise = details.IsBillWise;
         GstRegistrationType = gstin is not null && details.GstRegistrationType == GstRegistrationType.NotApplicable
@@ -232,6 +253,8 @@ public sealed class Ledger : CompanyScopedEntity
         Email = NameRules.CleanOptional(details.Email, 254, "email");
         Phone = NameRules.CleanOptional(details.Phone, 30, "phone");
         CreditPeriodDays = details.CreditPeriodDays;
+        GstTaxType = details.GstTaxType;
+        GstRates = GstRateSchedule.Normalize(details.GstRates);
     }
 
     private void EnsureNotDeleted()

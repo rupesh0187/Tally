@@ -13,6 +13,7 @@ public static class UiServiceCollectionExtensions
     {
         services.Add(new ServiceDescriptor(typeof(AppState), typeof(AppState), lifetime));
         services.Add(new ServiceDescriptor(typeof(LedgerCache), typeof(LedgerCache), lifetime));
+        services.Add(new ServiceDescriptor(typeof(StockItemCache), typeof(StockItemCache), lifetime));
         services.Add(new ServiceDescriptor(typeof(KeyboardShortcuts), typeof(KeyboardShortcuts), lifetime));
         return services;
     }

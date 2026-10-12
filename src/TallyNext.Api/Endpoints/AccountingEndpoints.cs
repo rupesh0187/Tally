@@ -2,11 +2,14 @@ using Microsoft.AspNetCore.Mvc;
 using TallyNext.Application.Accounts;
 using TallyNext.Application.Audit;
 using TallyNext.Application.Companies;
+using TallyNext.Application.Inventory;
 using TallyNext.Application.Reports;
+using TallyNext.Application.Tax;
 using TallyNext.Application.Vouchers;
 using TallyNext.Contracts.Accounts;
 using TallyNext.Contracts.Audit;
 using TallyNext.Contracts.Companies;
+using TallyNext.Contracts.Inventory;
 using TallyNext.Contracts.Vouchers;
 using TallyNext.Domain.Vouchers;
 
@@ -27,7 +30,10 @@ internal static class AccountingEndpoints
         MapCompanies(app.MapGroup("/api/companies").WithTags("Companies"));
         var company = app.MapGroup("/api/companies/{companyId:guid}");
         MapMasters(company);
+        MapInventory(company.MapGroup("/inventory").WithTags("Inventory"));
+        MapGst(company.MapGroup("/gst").WithTags("GST"));
         MapVouchers(company.MapGroup("/vouchers").WithTags("Vouchers"));
+        MapInvoices(company.MapGroup("/invoices").WithTags("Invoices"));
         MapReports(company.MapGroup("/reports").WithTags("Reports"));
         MapAudit(company.MapGroup("/audit").WithTags("Audit"));
     }
@@ -91,6 +97,57 @@ internal static class AccountingEndpoints
             .WithTags("Vouchers");
     }
 
+    private static void MapInventory(RouteGroupBuilder g)
+    {
+        g.MapPost("/defaults", async (Guid companyId, InventoryService s, CancellationToken ct) => TypedResults.Ok(await s.EnsureDefaultsAsync(companyId, ct)))
+            .WithSummary("Create the default unit (Nos) and Main Location godown when missing (companies created before inventory).");
+        g.MapGet("/units", async (Guid companyId, InventoryService s, CancellationToken ct) => TypedResults.Ok(await s.ListUnitsAsync(companyId, ct)));
+        g.MapPost("/units", async (Guid companyId, UnitInput r, InventoryService s, CancellationToken ct) => TypedResults.Ok(await s.SaveUnitAsync(companyId, null, r, ct)));
+        g.MapPut("/units/{unitId:guid}", async (Guid companyId, Guid unitId, UnitInput r, InventoryService s, CancellationToken ct) => TypedResults.Ok(await s.SaveUnitAsync(companyId, unitId, r, ct)));
+
+        g.MapGet("/godowns", async (Guid companyId, InventoryService s, CancellationToken ct) => TypedResults.Ok(await s.ListGodownsAsync(companyId, ct)));
+        g.MapPost("/godowns", async (Guid companyId, GodownInput r, InventoryService s, CancellationToken ct) => TypedResults.Ok(await s.SaveGodownAsync(companyId, null, r, ct)));
+        g.MapPut("/godowns/{godownId:guid}", async (Guid companyId, Guid godownId, GodownInput r, InventoryService s, CancellationToken ct) => TypedResults.Ok(await s.SaveGodownAsync(companyId, godownId, r, ct)));
+
+        g.MapGet("/items", async (Guid companyId, string? search, InventoryService s, CancellationToken ct) => TypedResults.Ok(await s.ListItemsAsync(companyId, search, ct)));
+        g.MapGet("/items/lookup", async (Guid companyId, InventoryService s, CancellationToken ct) => TypedResults.Ok(await s.LookupItemsAsync(companyId, ct)));
+        g.MapGet("/items/{itemId:guid}", async (Guid companyId, Guid itemId, InventoryService s, CancellationToken ct) => TypedResults.Ok(await s.GetItemAsync(companyId, itemId, ct)));
+        g.MapPost("/items", async (Guid companyId, StockItemInput r, InventoryService s, CancellationToken ct) => TypedResults.Ok(await s.SaveItemAsync(companyId, null, r, ct)));
+        g.MapPut("/items/{itemId:guid}", async (Guid companyId, Guid itemId, StockItemInput r, InventoryService s, CancellationToken ct) => TypedResults.Ok(await s.SaveItemAsync(companyId, itemId, r, ct)));
+        g.MapDelete("/items/{itemId:guid}", async (Guid companyId, Guid itemId, InventoryService s, CancellationToken ct) =>
+        {
+            await s.DeleteItemAsync(companyId, itemId, ct);
+            return TypedResults.NoContent();
+        });
+    }
+
+    private static void MapGst(RouteGroupBuilder g)
+    {
+        g.MapPut("/registration", async (Guid companyId, SetGstRegistrationRequest r, GstService s, CancellationToken ct) => TypedResults.Ok(await s.SetRegistrationAsync(companyId, r, ct)))
+            .WithSummary("Set the company's GST registration (not registered / regular / composition).");
+        g.MapPost("/tax-ledgers", async (Guid companyId, GstService s, CancellationToken ct) =>
+            {
+                await s.EnsureTaxLedgersAsync(companyId, ct);
+                return TypedResults.NoContent();
+            })
+            .WithSummary("Create any missing CGST/SGST/UTGST/IGST/Cess and Round Off ledgers.");
+    }
+
+    private static void MapInvoices(RouteGroupBuilder g)
+    {
+        g.MapPost("/preview", async (Guid companyId, InvoiceRequest r, InvoiceService s, CancellationToken ct) => TypedResults.Ok(await s.PreviewAsync(companyId, r, ct)))
+            .WithSummary("Compute tax and totals for an invoice without saving it.");
+        g.MapPost("/", async (Guid companyId, InvoiceRequest r, [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey, InvoiceService s, CancellationToken ct) =>
+            {
+                r.IdempotencyKey ??= idempotencyKey;
+                var voucher = await s.CreateAsync(companyId, r, ct);
+                return TypedResults.Created($"/api/companies/{companyId}/vouchers/{voucher.Id}", voucher);
+            })
+            .WithSummary("Create a sales/purchase invoice or credit/debit note with item lines. Safe to retry with the same id or Idempotency-Key.");
+        g.MapPut("/{voucherId:guid}", async (Guid companyId, Guid voucherId, InvoiceRequest r, InvoiceService s, CancellationToken ct) => TypedResults.Ok(await s.UpdateDraftAsync(companyId, voucherId, r, ct)))
+            .WithSummary("Update a draft invoice.");
+    }
+
     private static void MapVouchers(RouteGroupBuilder g)
     {
         g.MapGet("/", async (Guid companyId, DateOnly? from, DateOnly? to, Guid? voucherTypeId, VoucherStatus? status, string? search, int? page, int? pageSize, VoucherService s, CancellationToken ct) =>
@@ -134,6 +191,11 @@ internal static class AccountingEndpoints
             TypedResults.Ok(await s.BalanceSheetAsync(companyId, asAt, ct)));
         g.MapGet("/cash-bank", async (Guid companyId, DateOnly from, DateOnly to, ReportService s, CancellationToken ct) =>
             TypedResults.Ok(await s.CashAndBankSummaryAsync(companyId, from, to, ct)));
+        g.MapGet("/stock-summary", async (Guid companyId, DateOnly from, DateOnly to, ReportService s, CancellationToken ct) =>
+            TypedResults.Ok(await s.StockSummaryAsync(companyId, from, to, ct)));
+        g.MapGet("/gst-summary", async (Guid companyId, DateOnly from, DateOnly to, ReportService s, CancellationToken ct) =>
+            TypedResults.Ok(await s.GstSummaryAsync(companyId, from, to, ct)))
+            .WithSummary("Outward and inward supplies by rate with tax. An aid for returns, not a return.");
     }
 
     private static void MapAudit(RouteGroupBuilder g)

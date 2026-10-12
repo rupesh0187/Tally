@@ -4,8 +4,10 @@ using TallyNext.Application.Accounts;
 using TallyNext.Application.Audit;
 using TallyNext.Application.Common;
 using TallyNext.Application.Companies;
+using TallyNext.Application.Inventory;
 using TallyNext.Application.Reports;
 using TallyNext.Application.Security;
+using TallyNext.Application.Tax;
 using TallyNext.Application.Vouchers;
 
 namespace TallyNext.Application;
@@ -27,6 +29,10 @@ public static class DependencyInjection
         services.AddScoped<MembershipService>();
         services.AddScoped<ChartOfAccountsService>();
         services.AddScoped<VoucherService>();
+        services.AddScoped<InventoryService>();
+        services.AddScoped<GstService>();
+        services.AddScoped<InvoiceService>();
+        services.AddScoped<StockValuationService>();
         services.AddScoped<ReportService>();
         services.AddScoped<AuditService>();
         return services;

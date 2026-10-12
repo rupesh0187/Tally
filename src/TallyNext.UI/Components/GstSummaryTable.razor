@@ -1,0 +1,53 @@
+@* One section (outward or inward) of the GST summary. *@
+<table class="data" style="margin-bottom:.75rem">
+    <thead>
+        <tr><th>Taxability</th><th class="num">GST %</th><th>Supply</th><th class="num">Taxable value</th><th class="num">CGST</th><th class="num">SGST / UTGST</th><th class="num">IGST</th><th class="num">Cess</th></tr>
+    </thead>
+    <tbody>
+        @if (Rows.Count == 0)
+        {
+            <tr><td colspan="8" class="muted">Nothing in this period.</td></tr>
+        }
+        @foreach (var row in Rows)
+        {
+            <tr>
+                <td>@Taxability(row.Taxability)</td>
+                <td class="num">@(row.Taxability == TallyNext.Domain.Tax.Taxability.Taxable ? row.GstPercent.ToString("0.###", CultureInfo.InvariantCulture) : "")</td>
+                <td>@Supply(row.SupplyNature)</td>
+                <td class="num">@Fmt.AmountOrZero(row.Taxable)</td>
+                <td class="num">@Fmt.Amount(row.Cgst)</td>
+                <td class="num">@Fmt.Amount(row.StateTax)</td>
+                <td class="num">@Fmt.Amount(row.Igst)</td>
+                <td class="num">@Fmt.Amount(row.Cess)</td>
+            </tr>
+        }
+        <tr class="total">
+            <td>Total</td><td></td><td></td>
+            <td class="num">@Fmt.AmountOrZero(Rows.Sum(x => x.Taxable))</td>
+            <td class="num">@Fmt.AmountOrZero(Rows.Sum(x => x.Cgst))</td>
+            <td class="num">@Fmt.AmountOrZero(Rows.Sum(x => x.StateTax))</td>
+            <td class="num">@Fmt.AmountOrZero(Rows.Sum(x => x.Igst))</td>
+            <td class="num">@Fmt.AmountOrZero(Rows.Sum(x => x.Cess))</td>
+        </tr>
+    </tbody>
+</table>
+
+@code {
+    [Parameter, EditorRequired]
+    public IReadOnlyList<GstSummaryRow> Rows { get; set; } = [];
+
+    private static string Taxability(Taxability t) => t switch
+    {
+        TallyNext.Domain.Tax.Taxability.Taxable => "Taxable",
+        TallyNext.Domain.Tax.Taxability.Exempt => "Exempt",
+        TallyNext.Domain.Tax.Taxability.NilRated => "Nil rated",
+        _ => "Non-GST",
+    };
+
+    private static string Supply(SupplyNature nature) => nature switch
+    {
+        SupplyNature.InterState => "Inter-State",
+        SupplyNature.IntraStateUnionTerritory => "Within UT",
+        _ => "Within State",
+    };
+}

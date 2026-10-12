@@ -70,7 +70,24 @@
             <label class="field">PIN code <input class="input" @bind="_input.Pincode" maxlength="10" /></label>
             <label class="field">E-mail <input class="input" type="email" @bind="_input.Email" maxlength="254" /></label>
             <label class="field">Phone <input class="input" @bind="_input.Phone" maxlength="30" /></label>
+            <label class="field">GST duty ledger
+                <select class="input" @bind="_input.GstTaxType">
+                    <option value="@GstTaxType.None">Not a GST ledger</option>
+                    <option value="@GstTaxType.Cgst">CGST</option>
+                    <option value="@GstTaxType.Sgst">SGST</option>
+                    <option value="@GstTaxType.Utgst">UTGST</option>
+                    <option value="@GstTaxType.Igst">IGST</option>
+                    <option value="@GstTaxType.Cess">Cess</option>
+                </select>
+            </label>
         </div>
+
+        @if (_input.GstTaxType == GstTaxType.None && SelectedGroup?.Nature is AccountNature.Income or AccountNature.Expense)
+        {
+            <h2>GST rates for service lines</h2>
+            <p class="muted small">Used when this ledger is chosen on a service line of an invoice (stock items carry their own rates).</p>
+            <GstRateEditor Rates="_input.GstRates" DefaultFrom="@(State.Company?.BooksBeginningDate ?? State.Today)" Disabled="@(!State.Can(Permission.MasterEdit))" />
+        }
     </fieldset>
     @if (State.Can(Permission.MasterEdit))
     {
@@ -115,6 +132,7 @@
                     IsBillWise = _ledger.IsBillWise, GstRegistrationType = _ledger.GstRegistrationType, Gstin = _ledger.Gstin, StateCode = _ledger.StateCode, Pan = _ledger.Pan,
                     AddressLine1 = _ledger.AddressLine1, AddressLine2 = _ledger.AddressLine2, City = _ledger.City, Pincode = _ledger.Pincode, Email = _ledger.Email,
                     Phone = _ledger.Phone, CreditPeriodDays = _ledger.CreditPeriodDays, ExpectedVersion = _ledger.Version,
+                    GstTaxType = _ledger.GstTaxType, GstRates = _ledger.GstRates.Select(GstRateInput.From).ToList(),
                 };
                 _openingText = _ledger.OpeningBalance == 0 ? null : _ledger.OpeningBalance.ToString("0.00", CultureInfo.InvariantCulture);
             }
@@ -157,6 +175,15 @@
         if (SelectedGroup?.Nature is AccountNature.Income or AccountNature.Expense)
         {
             _input.OpeningBalance = 0;
+        }
+        else
+        {
+            _input.GstRates.Clear();
+        }
+
+        if (_input.GstTaxType != GstTaxType.None)
+        {
+            _input.GstRates.Clear();
         }
 
         LedgerDto? saved = null;

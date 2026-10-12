@@ -7,6 +7,8 @@ using TallyNext.Contracts.Sync;
 using TallyNext.Domain.Accounts;
 using TallyNext.Domain.Common;
 using TallyNext.Domain.Companies;
+using TallyNext.Domain.Inventory;
+using TallyNext.Domain.Tax;
 using TallyNext.Domain.Vouchers;
 using TallyNext.Infrastructure.Server.Persistence;
 
@@ -43,6 +45,9 @@ internal sealed class SyncChangeApplier(
             SyncEntityTypes.Ledger => await ApplyLedgerAsync(change, cancellationToken),
             SyncEntityTypes.VoucherType => await ApplyVoucherTypeAsync(change, cancellationToken),
             SyncEntityTypes.Voucher => await ApplyVoucherAsync(userId, device, change, cancellationToken),
+            SyncEntityTypes.Unit => await ApplyUnitAsync(change, cancellationToken),
+            SyncEntityTypes.Godown => await ApplyGodownAsync(change, cancellationToken),
+            SyncEntityTypes.StockItem => await ApplyStockItemAsync(change, cancellationToken),
             _ => throw new SyncRejectedException("sync.entity_type_not_uploadable", $"'{change.EntityType}' cannot be uploaded."),
         };
     }
@@ -72,6 +77,7 @@ internal sealed class SyncChangeApplier(
 
             var company = Company.Create(s.Id, ProfileOf(s), s.CurrencyCode, s.FinancialYearStartMonth, s.BooksBeginningDate, userId);
             company.SetLockedThrough(s.LockedThroughDate);
+            company.SetGstRegistration(s.GstRegistration);
             db.Companies.Add(company);
             if (!await db.CompanyMemberships.AnyAsync(m => m.CompanyId == s.Id && m.UserId == userId, ct))
             {
@@ -101,10 +107,28 @@ internal sealed class SyncChangeApplier(
             existing.SetLockedThrough(s.LockedThroughDate);
         }
 
+        // Order matters: a GSTIN can only be removed once the company is no longer GST registered, and registering
+        // needs the GSTIN first.
+        var registrationChanged = existing.GstRegistration != s.GstRegistration;
+        if (registrationChanged)
+        {
+            await guard.RequireAsync(s.Id, Permission.CompanyManage, ct);
+        }
+
+        if (registrationChanged && s.GstRegistration == GstRegistrationType.NotApplicable)
+        {
+            existing.SetGstRegistration(s.GstRegistration);
+        }
+
         if (ProfileOf(s) != existing.GetProfile())
         {
             await guard.RequireAsync(s.Id, Permission.CompanyManage, ct);
             existing.UpdateProfile(ProfileOf(s));
+        }
+
+        if (registrationChanged && s.GstRegistration != GstRegistrationType.NotApplicable)
+        {
+            existing.SetGstRegistration(s.GstRegistration);
         }
 
         audit.Record(s.Id, "company.updated", "company", s.Id, $"Company '{existing.Name}' updated on a device", before, SnapshotMapper.ToSnapshot(existing), change.ChangeId);
@@ -205,7 +229,15 @@ internal sealed class SyncChangeApplier(
         var existing = await db.Ledgers.SingleOrDefaultAsync(l => l.Id == s.Id, ct);
         var details = new LedgerDetails(
             s.Alias, s.IsBillWise, s.GstRegistrationType, s.Gstin, s.StateCode, s.Pan, s.AddressLine1, s.AddressLine2,
-            s.City, s.Pincode, s.Email, s.Phone, s.CreditPeriodDays);
+            s.City, s.Pincode, s.Email, s.Phone, s.CreditPeriodDays, s.GstTaxType, s.GstRates);
+        if (s.GstTaxType != GstTaxType.None)
+        {
+            var hierarchy = new GroupHierarchy(await db.AccountGroups.AsNoTracking().Where(g => g.CompanyId == s.CompanyId).ToListAsync(ct));
+            if (!hierarchy.HasAncestorWithKey(group.Id, SystemGroupKeys.DutiesAndTaxes))
+            {
+                throw new SyncRejectedException("ledger.gst_tax_type_group", "GST tax ledgers must be under Duties & Taxes.");
+            }
+        }
 
         if (existing is null)
         {
@@ -231,7 +263,9 @@ internal sealed class SyncChangeApplier(
         var before = SnapshotMapper.ToSnapshot(existing);
         if (change.Operation == SyncOperation.Delete || s.IsDeleted)
         {
-            if (await db.VoucherLines.AnyAsync(l => l.CompanyId == s.CompanyId && l.LedgerId == existing.Id, ct))
+            if (await db.VoucherLines.AnyAsync(l => l.CompanyId == s.CompanyId && l.LedgerId == existing.Id, ct)
+                || await db.VoucherItemLines.AnyAsync(l => l.CompanyId == s.CompanyId && l.LedgerId == existing.Id, ct)
+                || await db.Vouchers.AnyAsync(v => v.CompanyId == s.CompanyId && v.PartyLedgerId == existing.Id, ct))
             {
                 throw new SyncRejectedException("ledger.in_use", "This ledger is used in vouchers and cannot be deleted.");
             }
@@ -296,6 +330,177 @@ internal sealed class SyncChangeApplier(
         return existing;
     }
 
+    // ------------------------------------------------------------------ inventory masters
+
+    private async Task<UnitOfMeasure> ApplyUnitAsync(SyncChangeUpload change, CancellationToken ct)
+    {
+        var s = Read<UnitSnapshot>(change);
+        EnsureEnvelope(change, s.Id, s.CompanyId);
+        await guard.RequireAsync(s.CompanyId, Permission.MasterEdit, ct);
+        var existing = await db.Units.SingleOrDefaultAsync(u => u.Id == s.Id, ct);
+        if (existing is null)
+        {
+            EnsureNew(change);
+            var unit = UnitOfMeasure.Create(s.Id, s.CompanyId, s.Symbol, s.Name, s.DecimalPlaces);
+            await EnsureUniqueUnitAsync(unit, ct);
+            db.Units.Add(unit);
+            audit.Record(s.CompanyId, "unit.created", "unit", unit.Id, $"Unit '{unit.Symbol}' created on a device", after: SnapshotMapper.ToSnapshot(unit), changeId: change.ChangeId);
+            return unit;
+        }
+
+        EnsureSameCompany(existing.CompanyId, s.CompanyId);
+        EnsureVersion(existing, change);
+        var before = SnapshotMapper.ToSnapshot(existing);
+        var inUse = await db.StockItems.AnyAsync(i => i.CompanyId == s.CompanyId && i.UnitId == existing.Id && !i.IsDeleted, ct);
+        if (change.Operation == SyncOperation.Delete || s.IsDeleted)
+        {
+            if (inUse)
+            {
+                throw new SyncRejectedException("unit.in_use", "Stock items still use this unit.");
+            }
+
+            existing.MarkDeleted();
+            audit.Record(s.CompanyId, "unit.deleted", "unit", existing.Id, $"Unit '{existing.Symbol}' deleted on a device", before, changeId: change.ChangeId);
+            return existing;
+        }
+
+        if (s.DecimalPlaces < existing.DecimalPlaces && inUse)
+        {
+            throw new SyncRejectedException("unit.decimals_in_use", "Decimal places cannot be reduced for a unit already used by stock items.");
+        }
+
+        existing.Update(s.Symbol, s.Name, s.DecimalPlaces);
+        await EnsureUniqueUnitAsync(existing, ct);
+        audit.Record(s.CompanyId, "unit.updated", "unit", existing.Id, $"Unit '{existing.Symbol}' updated on a device", before, SnapshotMapper.ToSnapshot(existing), change.ChangeId);
+        return existing;
+    }
+
+    private async Task<Godown> ApplyGodownAsync(SyncChangeUpload change, CancellationToken ct)
+    {
+        var s = Read<GodownSnapshot>(change);
+        EnsureEnvelope(change, s.Id, s.CompanyId);
+        await guard.RequireAsync(s.CompanyId, Permission.MasterEdit, ct);
+        var existing = await db.Godowns.SingleOrDefaultAsync(g => g.Id == s.Id, ct);
+        if (existing is null)
+        {
+            EnsureNew(change);
+            if (s.IsSystem && await db.Godowns.AnyAsync(g => g.CompanyId == s.CompanyId && g.IsSystem && !g.IsDeleted, ct))
+            {
+                throw new SyncRejectedException("godown.system_exists", "The company already has its main location.");
+            }
+
+            var godown = Godown.Create(s.Id, s.CompanyId, s.Name, s.IsSystem);
+            await EnsureUniqueGodownAsync(godown, ct);
+            db.Godowns.Add(godown);
+            audit.Record(s.CompanyId, "godown.created", "godown", godown.Id, $"Godown '{godown.Name}' created on a device", after: SnapshotMapper.ToSnapshot(godown), changeId: change.ChangeId);
+            return godown;
+        }
+
+        EnsureSameCompany(existing.CompanyId, s.CompanyId);
+        EnsureVersion(existing, change);
+        var before = SnapshotMapper.ToSnapshot(existing);
+        if (change.Operation == SyncOperation.Delete || s.IsDeleted)
+        {
+            if (await db.StockItems.AnyAsync(i => i.CompanyId == s.CompanyId && i.OpeningGodownId == existing.Id && !i.IsDeleted, ct)
+                || await db.VoucherItemLines.AnyAsync(l => l.CompanyId == s.CompanyId && l.GodownId == existing.Id, ct))
+            {
+                throw new SyncRejectedException("godown.in_use", "The godown holds stock or is used in vouchers.");
+            }
+
+            existing.MarkDeleted();
+            audit.Record(s.CompanyId, "godown.deleted", "godown", existing.Id, $"Godown '{existing.Name}' deleted on a device", before, changeId: change.ChangeId);
+            return existing;
+        }
+
+        existing.Rename(s.Name);
+        await EnsureUniqueGodownAsync(existing, ct);
+        audit.Record(s.CompanyId, "godown.updated", "godown", existing.Id, $"Godown '{existing.Name}' updated on a device", before, SnapshotMapper.ToSnapshot(existing), change.ChangeId);
+        return existing;
+    }
+
+    private async Task<StockItem> ApplyStockItemAsync(SyncChangeUpload change, CancellationToken ct)
+    {
+        var s = Read<StockItemSnapshot>(change);
+        EnsureEnvelope(change, s.Id, s.CompanyId);
+        await guard.RequireAsync(s.CompanyId, Permission.MasterEdit, ct);
+        var existing = await db.StockItems.SingleOrDefaultAsync(i => i.Id == s.Id, ct);
+        if (existing is not null)
+        {
+            EnsureSameCompany(existing.CompanyId, s.CompanyId);
+            EnsureVersion(existing, change);
+            if (change.Operation == SyncOperation.Delete || s.IsDeleted)
+            {
+                if (await db.VoucherItemLines.AnyAsync(l => l.CompanyId == s.CompanyId && l.StockItemId == existing.Id, ct))
+                {
+                    throw new SyncRejectedException("stock_item.in_use", "This item is used in vouchers and cannot be deleted.");
+                }
+
+                var deletedBefore = SnapshotMapper.ToSnapshot(existing);
+                existing.MarkDeleted();
+                audit.Record(s.CompanyId, "stock_item.deleted", "stock-item", existing.Id, $"Stock item '{existing.Name}' deleted on a device", deletedBefore, changeId: change.ChangeId);
+                return existing;
+            }
+        }
+
+        var unit = await db.Units.SingleOrDefaultAsync(u => u.CompanyId == s.CompanyId && u.Id == s.UnitId, ct)
+            ?? throw new SyncDeferredException("sync.dependency_missing", "The item's unit has not been uploaded yet.");
+        Godown? godown = null;
+        if (s.OpeningGodownId is { } godownId)
+        {
+            godown = await db.Godowns.SingleOrDefaultAsync(g => g.CompanyId == s.CompanyId && g.Id == godownId, ct)
+                ?? throw new SyncDeferredException("sync.dependency_missing", "The item's opening godown has not been uploaded yet.");
+        }
+
+        if (existing is null)
+        {
+            EnsureNew(change);
+            var item = StockItem.Create(
+                s.Id, s.CompanyId, s.Name, unit, s.ValuationMethod, s.GstRates, s.OpeningQuantityMilli, Money.FromMinor(s.OpeningValueMinor), godown, s.Alias, s.PartNumber);
+            await EnsureUniqueItemAsync(item, ct);
+            db.StockItems.Add(item);
+            audit.Record(s.CompanyId, "stock_item.created", "stock-item", item.Id, $"Stock item '{item.Name}' created on a device", after: SnapshotMapper.ToSnapshot(item), changeId: change.ChangeId);
+            return item;
+        }
+
+        var before = SnapshotMapper.ToSnapshot(existing);
+        existing.Update(s.Name, unit, s.ValuationMethod, s.GstRates, s.OpeningQuantityMilli, Money.FromMinor(s.OpeningValueMinor), godown, s.Alias, s.PartNumber);
+        await EnsureUniqueItemAsync(existing, ct);
+        audit.Record(s.CompanyId, "stock_item.updated", "stock-item", existing.Id, $"Stock item '{existing.Name}' updated on a device", before, SnapshotMapper.ToSnapshot(existing), change.ChangeId);
+        return existing;
+    }
+
+    private async Task EnsureUniqueUnitAsync(UnitOfMeasure unit, CancellationToken ct)
+    {
+        if (await db.Units.AnyAsync(u => u.CompanyId == unit.CompanyId && !u.IsDeleted && u.Id != unit.Id && u.NormalizedSymbol == unit.NormalizedSymbol, ct))
+        {
+            throw new SyncRejectedException("unit.duplicate_symbol", "A unit with this symbol already exists.");
+        }
+    }
+
+    private async Task EnsureUniqueGodownAsync(Godown godown, CancellationToken ct)
+    {
+        if (await db.Godowns.AnyAsync(g => g.CompanyId == godown.CompanyId && !g.IsDeleted && g.Id != godown.Id && g.NormalizedName == godown.NormalizedName, ct))
+        {
+            throw new SyncRejectedException("godown.duplicate_name", "A godown with this name already exists.");
+        }
+    }
+
+    private async Task EnsureUniqueItemAsync(StockItem item, CancellationToken ct)
+    {
+        if (await db.StockItems.AnyAsync(i => i.CompanyId == item.CompanyId && !i.IsDeleted && i.Id != item.Id && i.NormalizedName == item.NormalizedName, ct))
+        {
+            throw new SyncRejectedException("stock_item.duplicate_name", "A stock item with this name already exists.");
+        }
+    }
+
+    private static void EnsureSameCompany(Guid existingCompanyId, Guid snapshotCompanyId)
+    {
+        if (existingCompanyId != snapshotCompanyId)
+        {
+            throw new SyncRejectedException("sync.id_mismatch", "The record belongs to another company.");
+        }
+    }
+
     // ------------------------------------------------------------------ vouchers
 
     private async Task<Voucher> ApplyVoucherAsync(Guid userId, Device device, SyncChangeUpload change, CancellationToken ct)
@@ -318,7 +523,8 @@ internal sealed class SyncChangeApplier(
             .ToList();
         var header = new VoucherHeader(s.Narration, s.Reference, s.ReferenceDate);
 
-        var existing = await db.Vouchers.Include(v => v.Lines).SingleOrDefaultAsync(v => v.Id == s.Id, ct);
+        var itemLines = ItemLinesOf(s);
+        var existing = await db.Vouchers.Include(v => v.Lines).Include(v => v.ItemLines).SingleOrDefaultAsync(v => v.Id == s.Id, ct);
         if (existing is null)
         {
             EnsureNew(change);
@@ -331,7 +537,7 @@ internal sealed class SyncChangeApplier(
             if (s.ReversalOfVoucherId is { } originalId)
             {
                 await guard.RequireAsync(s.CompanyId, Permission.VoucherReverse, ct);
-                var original = await db.Vouchers.Include(v => v.Lines).SingleOrDefaultAsync(v => v.CompanyId == s.CompanyId && v.Id == originalId, ct)
+                var original = await db.Vouchers.Include(v => v.Lines).Include(v => v.ItemLines).SingleOrDefaultAsync(v => v.CompanyId == s.CompanyId && v.Id == originalId, ct)
                     ?? throw new SyncDeferredException("sync.dependency_missing", "The reversed voucher has not been uploaded yet.");
                 if (await db.Vouchers.AnyAsync(v => v.ReversalOfVoucherId == originalId, ct))
                 {
@@ -341,7 +547,7 @@ internal sealed class SyncChangeApplier(
                 voucher = Voucher.CreateReversal(s.Id, company, original, s.Date, s.Narration, userId, device.Id);
                 var expected = voucher.Lines.Select(l => (l.LedgerId, l.Side, l.AmountMinor)).Order().ToList();
                 var actual = s.Lines.Select(l => (l.LedgerId, l.Side, l.AmountMinor)).Order().ToList();
-                if (!expected.SequenceEqual(actual))
+                if (!expected.SequenceEqual(actual) || !ItemLinesMatch(voucher, s))
                 {
                     throw new SyncRejectedException("voucher.reversal_mismatch", "The reversal does not mirror the original voucher.");
                 }
@@ -349,6 +555,10 @@ internal sealed class SyncChangeApplier(
             else
             {
                 voucher = Voucher.CreateDraft(s.Id, company, type, s.Date, header, lines, userId, device.Id, s.IdempotencyKey);
+                if (itemLines is not null)
+                {
+                    voucher.SetInvoiceDetails(s.PartyLedgerId!.Value, s.PlaceOfSupplyStateCode, s.SupplyNature!.Value, itemLines);
+                }
             }
 
             await ApplyStatusAsync(voucher, company, device, s, ct);
@@ -376,7 +586,17 @@ internal sealed class SyncChangeApplier(
         }
         else
         {
+            if (existing.IsInvoice && itemLines is null)
+            {
+                throw new SyncRejectedException("voucher.invoice_mode_change", "An invoice draft cannot be turned into an accounting voucher.");
+            }
+
             existing.UpdateDraft(company, s.Date, header, lines);
+            if (itemLines is not null)
+            {
+                existing.SetInvoiceDetails(s.PartyLedgerId!.Value, s.PlaceOfSupplyStateCode, s.SupplyNature!.Value, itemLines);
+            }
+
             await ApplyStatusAsync(existing, company, device, s, ct);
         }
 
@@ -426,12 +646,73 @@ internal sealed class SyncChangeApplier(
 
     private async Task EnsureLedgersPresentAsync(VoucherSnapshot s, CancellationToken ct)
     {
-        var ids = s.Lines.Select(l => l.LedgerId).Distinct().ToList();
+        var items = s.ItemLines ?? [];
+        var ids = s.Lines.Select(l => l.LedgerId)
+            .Concat(items.Select(l => l.LedgerId))
+            .Concat(s.PartyLedgerId is { } party ? [party] : [])
+            .Distinct()
+            .ToList();
         var found = await db.Ledgers.CountAsync(l => l.CompanyId == s.CompanyId && ids.Contains(l.Id), ct);
         if (found != ids.Count)
         {
             throw new SyncDeferredException("sync.dependency_missing", "A ledger used by this voucher has not been uploaded yet.");
         }
+
+        var itemIds = items.Where(l => l.StockItemId is not null).Select(l => l.StockItemId!.Value).Distinct().ToList();
+        if (itemIds.Count > 0 && await db.StockItems.CountAsync(i => i.CompanyId == s.CompanyId && itemIds.Contains(i.Id), ct) != itemIds.Count)
+        {
+            throw new SyncDeferredException("sync.dependency_missing", "A stock item used by this voucher has not been uploaded yet.");
+        }
+
+        var godownIds = items.Where(l => l.GodownId is not null).Select(l => l.GodownId!.Value).Distinct().ToList();
+        if (godownIds.Count > 0 && await db.Godowns.CountAsync(g => g.CompanyId == s.CompanyId && godownIds.Contains(g.Id), ct) != godownIds.Count)
+        {
+            throw new SyncDeferredException("sync.dependency_missing", "A godown used by this voucher has not been uploaded yet.");
+        }
+    }
+
+    /// <summary>The invoice lines of an uploaded voucher, or null for an accounting voucher.</summary>
+    private static List<VoucherItemLineSpec>? ItemLinesOf(VoucherSnapshot s)
+    {
+        if (s.PartyLedgerId is null)
+        {
+            if (s.ItemLines is { Count: > 0 })
+            {
+                throw new SyncRejectedException("invoice.party_required", "An invoice needs a party.");
+            }
+
+            return null;
+        }
+
+        if (s.SupplyNature is null || s.ItemLines is not { Count: > 0 })
+        {
+            throw new SyncRejectedException("invoice.incomplete", "The invoice is incomplete.");
+        }
+
+        return s.ItemLines.OrderBy(l => l.LineNo)
+            .Select(l => new VoucherItemLineSpec(
+                l.Id, l.Kind, l.StockItemId, l.GodownId, l.LedgerId, l.Description, l.QuantityMilli, l.RateScaled, l.DiscountMilliPercent,
+                Money.FromMinor(l.TaxableMinor), l.Direction,
+                new GstRateEntry(s.Date, l.Taxability, l.IgstMilliPercent, l.CessMilliPercent, l.HsnSac),
+                new LineTax(Money.FromMinor(l.CgstMinor), Money.FromMinor(l.StateTaxMinor), Money.FromMinor(l.IgstMinor), Money.FromMinor(l.CessMinor))))
+            .ToList();
+    }
+
+    /// <summary>A reversal's invoice lines must be the original's with the stock movement turned around.</summary>
+    private static bool ItemLinesMatch(Voucher derived, VoucherSnapshot s)
+    {
+        if (derived.PartyLedgerId != s.PartyLedgerId || derived.SupplyNature != s.SupplyNature || derived.PlaceOfSupplyStateCode != s.PlaceOfSupplyStateCode)
+        {
+            return false;
+        }
+
+        var expected = derived.ItemLines.OrderBy(l => l.LineNo)
+            .Select(l => (l.Kind, l.StockItemId, l.GodownId, l.LedgerId, l.QuantityMilli, l.RateScaled, l.DiscountMilliPercent, l.TaxableMinor, l.Direction,
+                l.Taxability, l.IgstMilliPercent, l.CessMilliPercent, l.CgstMinor, l.StateTaxMinor, l.IgstMinor, l.CessMinor));
+        var actual = (s.ItemLines ?? []).OrderBy(l => l.LineNo)
+            .Select(l => (l.Kind, l.StockItemId, l.GodownId, l.LedgerId, l.QuantityMilli, l.RateScaled, l.DiscountMilliPercent, l.TaxableMinor, l.Direction,
+                l.Taxability, l.IgstMilliPercent, l.CessMilliPercent, l.CgstMinor, l.StateTaxMinor, l.IgstMinor, l.CessMinor));
+        return expected.SequenceEqual(actual);
     }
 
     // ------------------------------------------------------------------ helpers

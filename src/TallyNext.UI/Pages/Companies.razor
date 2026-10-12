@@ -1,6 +1,7 @@
 @page "/companies"
 @inherits AppPage
 @inject LedgerCache LedgerCache
+@inject StockItemCache ItemCache
 
 <PageTitle>Companies — TallyNext</PageTitle>
 
@@ -108,6 +109,7 @@
     private void Select(CompanySummaryDto company)
     {
         LedgerCache.Invalidate();
+        ItemCache.Invalidate();
         State.SelectCompany(company);
         Nav.NavigateTo("");
     }

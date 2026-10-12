@@ -63,12 +63,23 @@ server that independently record "user U owns company C" create the same row.
 | `Vouchers` | Id | (CompanyId, Date, Id); **unique** (CompanyId, VoucherTypeId, FinancialYearStart, SeriesCode, SequenceNumber) WHERE SequenceNumber IS NOT NULL; **unique** (CompanyId, IdempotencyKey); **unique** ReversalOfVoucherId |
 | `VoucherLines` | Id | (CompanyId, LedgerId, VoucherDate) for reports; unique (VoucherId, LineNo); AmountMinor > 0 + Side |
 | `VoucherNumberSeries` | Id | unique (CompanyId, VoucherTypeId, FinancialYearStart, SeriesCode); store-local, not replicated |
+| `VoucherItemLines` | Id | invoice lines: kind (stock/service), item, godown, ledger, `QuantityMilli` (qty × 1000), `RateScaled` (rate × 10,000), discount (milli-%), `TaxableMinor`, stock direction, taxability, GST/cess rate (milli-%), HSN/SAC, CGST/SGST-UTGST/IGST/cess minor; (CompanyId, StockItemId, VoucherDate) for valuation; (CompanyId, VoucherDate) for the GST summary; unique (VoucherId, LineNo) |
+| `Units` | Id | symbol, name, decimal places (0–3); unique (CompanyId, NormalizedSymbol) WHERE NOT IsDeleted |
+| `Godowns` | Id | unique (CompanyId, NormalizedName) WHERE NOT IsDeleted; one `IsSystem` "Main Location" per company |
+| `StockItems` | Id | unit, valuation method, opening quantity/value/godown, `GstRatesJson`; unique (CompanyId, NormalizedName) WHERE NOT IsDeleted |
 | `AuditEntries` | Id | unique (ChainKey, ChainSequence); (CompanyId, EntityType, EntityId); (CompanyId, OccurredAtUtc); `ChangesJson` is `text`, never `jsonb` |
 | `AuditChainHeads` | ChainKey | last sequence + hash per chain |
 
 Partial-index filters are written as `"IsDeleted" = FALSE`, valid in PostgreSQL and SQLite ≥ 3.23.
 
-**Device-side difference:** in `LocalDbContext` the name, voucher-number, idempotency-key and reversal indexes are
+Milestone 10 added (migration `InventoryAndGst` on both providers): `Companies.GstRegistration`;
+`Ledgers.GstTaxType` and `Ledgers.GstRatesJson`; `Vouchers.PartyLedgerId`, `PlaceOfSupplyStateCode` and
+`SupplyNature`; and the four tables above. GST rate histories (a handful of effective-dated entries, always read
+with their owner) are stored as JSON **text** in one column on both providers; rates are integers in thousandths
+of a percent (18 % = 18000) so they are exact everywhere. Quantities and rates are scaled integers for the same
+reason. Stock values are not stored: they are recomputed from opening stock and posted item lines.
+
+**Device-side difference:** in `LocalDbContext` the name (incl. unit symbol, godown and stock item names), voucher-number, idempotency-key and reversal indexes are
 declared **non-unique** (same columns and filters). The rules are still enforced by the application services for
 local saves; the reason is the sync "conflict window" (see SYNC_DESIGN.md). The server keeps them unique.
 

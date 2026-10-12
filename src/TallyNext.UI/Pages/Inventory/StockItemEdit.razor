@@ -1,0 +1,153 @@
+@page "/inventory/items/new"
+@page "/inventory/items/{Id:guid}"
+@inherits AppPage
+@inject StockItemCache ItemCache
+
+<PageTitle>@(Id is null ? "New stock item" : _input.Name) — TallyNext</PageTitle>
+
+<div class="page-head">
+    <div><h1>@(Id is null ? "New stock item" : _input.Name)</h1><div class="muted">Inventory master</div></div>
+</div>
+<Alerts Error="@Error" Notice="@Notice" />
+
+<div class="card">
+    <fieldset disabled="@(!State.Can(Permission.MasterEdit))" style="border:0; padding:0; margin:0">
+        <div class="form-grid">
+            <label class="field">Name * <input class="input" @bind="_input.Name" maxlength="100" autofocus /></label>
+            <label class="field">Alias <input class="input" @bind="_input.Alias" maxlength="100" /></label>
+            <label class="field">Part number <input class="input mono" @bind="_input.PartNumber" maxlength="50" /></label>
+            <label class="field">Unit *
+                <select class="input" value="@_input.UnitId" @onchange="e => _input.UnitId = Guid.TryParse(e.Value?.ToString(), out var u) ? u : Guid.Empty">
+                    <option value="@Guid.Empty">— choose —</option>
+                    @foreach (var u in _units)
+                    {
+                        <option value="@u.Id">@u.Symbol — @u.Name</option>
+                    }
+                </select>
+            </label>
+            <label class="field">Valuation method
+                <select class="input" @bind="_input.ValuationMethod">
+                    <option value="@ValuationMethod.WeightedAverage">Weighted average</option>
+                    <option value="@ValuationMethod.Fifo">FIFO (first in, first out)</option>
+                </select>
+            </label>
+        </div>
+
+        <h2>Opening stock <span class="muted small">(as at @(State.Company is { } c ? Fmt.Date(c.BooksBeginningDate) : ""))</span></h2>
+        <div class="form-grid">
+            <label class="field">Quantity <input class="input num" inputmode="decimal" @bind="_input.OpeningQuantity" /></label>
+            <label class="field">Value <input class="input num" inputmode="decimal" @bind="_input.OpeningValue" /></label>
+            <label class="field">Godown
+                <select class="input" value="@_input.OpeningGodownId" @onchange="e => _input.OpeningGodownId = Guid.TryParse(e.Value?.ToString(), out var g) ? g : null">
+                    <option value="">—</option>
+                    @foreach (var g in _godowns)
+                    {
+                        <option value="@g.Id">@g.Name</option>
+                    }
+                </select>
+            </label>
+        </div>
+        <p class="muted small">The opening value is part of the opening balances: match it with the capital or other opening balances, or the balance sheet shows a difference in opening balances.</p>
+
+        <h2>GST rates</h2>
+        <GstRateEditor Rates="_input.GstRates" DefaultFrom="@(State.Company?.BooksBeginningDate ?? State.Today)" Disabled="@(!State.Can(Permission.MasterEdit))" />
+    </fieldset>
+
+    @if (State.Can(Permission.MasterEdit))
+    {
+        <div class="form-actions">
+            <button class="btn primary" disabled="@Busy" @onclick="SaveAsync">Save <kbd>Ctrl+S</kbd></button>
+            @if (Id is not null)
+            {
+                <button class="btn danger" disabled="@Busy" @onclick="DeleteAsync">Delete</button>
+            }
+            <a class="btn" href="inventory/items">Back to items</a>
+        </div>
+    }
+</div>
+
+@code {
+    private IReadOnlyList<UnitDto> _units = [];
+    private IReadOnlyList<GodownDto> _godowns = [];
+    private StockItemInput _input = new();
+
+    [Parameter]
+    public Guid? Id { get; set; }
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (!State.HasCompany)
+        {
+            return;
+        }
+
+        await RunAsync(async () =>
+        {
+            _units = await Runner.RunAsync<InventoryService, IReadOnlyList<UnitDto>>(s => s.ListUnitsAsync(State.CompanyId));
+            _godowns = await Runner.RunAsync<InventoryService, IReadOnlyList<GodownDto>>(s => s.ListGodownsAsync(State.CompanyId));
+            if (Id is { } id)
+            {
+                var item = await Runner.RunAsync<InventoryService, StockItemDto>(s => s.GetItemAsync(State.CompanyId, id));
+                _input = new StockItemInput
+                {
+                    Name = item.Name, Alias = item.Alias, PartNumber = item.PartNumber, UnitId = item.UnitId, ValuationMethod = item.ValuationMethod,
+                    GstRates = item.GstRates.Select(GstRateInput.From).ToList(), OpeningQuantity = item.OpeningQuantity, OpeningValue = item.OpeningValue,
+                    OpeningGodownId = item.OpeningGodownId, ExpectedVersion = item.Version,
+                };
+            }
+            else
+            {
+                _input = new StockItemInput
+                {
+                    Id = Ids.New(),
+                    UnitId = _units.FirstOrDefault()?.Id ?? Guid.Empty,
+                    OpeningGodownId = _godowns.FirstOrDefault(g => g.IsSystem)?.Id,
+                };
+            }
+        });
+    }
+
+    protected override async Task<bool> HandleShortcutAsync(string key)
+    {
+        if (key is "Ctrl+S" or "Ctrl+Enter" && State.Can(Permission.MasterEdit))
+        {
+            await InvokeAsync(SaveAsync);
+            return true;
+        }
+
+        return false;
+    }
+
+    private async Task SaveAsync()
+    {
+        if (_input.OpeningQuantity == 0)
+        {
+            _input.OpeningValue = 0;
+        }
+
+        StockItemDto? saved = null;
+        var editingId = Id;
+        if (await RunAsync(async () => saved = await Runner.RunAsync<InventoryService, StockItemDto>(s => s.SaveItemAsync(State.CompanyId, editingId, _input))))
+        {
+            ItemCache.Invalidate();
+            if (editingId is null)
+            {
+                Nav.NavigateTo($"inventory/items/{saved!.Id}");
+            }
+            else
+            {
+                _input.ExpectedVersion = saved!.Version;
+                Notice = "Saved.";
+            }
+        }
+    }
+
+    private async Task DeleteAsync()
+    {
+        if (Id is { } id && await RunAsync(() => Runner.RunAsync<InventoryService>(s => s.DeleteItemAsync(State.CompanyId, id))))
+        {
+            ItemCache.Invalidate();
+            Nav.NavigateTo("inventory/items");
+        }
+    }
+}

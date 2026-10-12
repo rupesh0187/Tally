@@ -1,4 +1,6 @@
 using TallyNext.Domain.Common;
+using TallyNext.Domain.Inventory;
+using TallyNext.Domain.Tax;
 using TallyNext.Domain.Vouchers;
 
 namespace TallyNext.Contracts.Vouchers;
@@ -68,7 +70,121 @@ public sealed record VoucherDto(
     Guid? CreatedOnDeviceId,
     DateTime CreatedAtUtc,
     DateTime? PostedAtUtc,
-    long Version);
+    long Version,
+    InvoiceDetailsDto? Invoice = null);
+
+/// <summary>Invoice part of a voucher (null for plain accounting vouchers).</summary>
+/// <param name="GrandTotal">Amount charged to the party (after round-off). The voucher's Total is the debit total, which
+/// also includes a debit round-off line.</param>
+public sealed record InvoiceDetailsDto(
+    Guid PartyLedgerId,
+    string PartyName,
+    string? PlaceOfSupplyStateCode,
+    SupplyNature SupplyNature,
+    IReadOnlyList<InvoiceLineDto> Lines,
+    decimal Taxable,
+    decimal Cgst,
+    decimal StateTax,
+    decimal Igst,
+    decimal Cess,
+    decimal RoundOff = 0,
+    decimal GrandTotal = 0);
+
+public sealed record InvoiceLineDto(
+    Guid Id,
+    int LineNo,
+    InvoiceLineKind Kind,
+    Guid? StockItemId,
+    string? ItemName,
+    Guid? GodownId,
+    string? GodownName,
+    Guid LedgerId,
+    string LedgerName,
+    string? Description,
+    decimal Quantity,
+    string? UnitSymbol,
+    decimal Rate,
+    decimal DiscountPercent,
+    decimal Taxable,
+    StockDirection Direction,
+    Taxability Taxability,
+    decimal GstPercent,
+    string? HsnSac,
+    decimal Cgst,
+    decimal StateTax,
+    decimal Igst,
+    decimal Cess);
+
+/// <summary>Sales / purchase / credit note / debit note with item or service lines; taxes are computed.</summary>
+public sealed class InvoiceRequest
+{
+    public Guid? Id { get; set; }
+
+    public Guid VoucherTypeId { get; set; }
+
+    public DateOnly Date { get; set; }
+
+    public Guid PartyLedgerId { get; set; }
+
+    /// <summary>Overrides the default place of supply (party's State for sales, company's State for purchases).</summary>
+    public string? PlaceOfSupplyStateCode { get; set; }
+
+    public string? Narration { get; set; }
+
+    public string? Reference { get; set; }
+
+    public DateOnly? ReferenceDate { get; set; }
+
+    /// <summary>Round the invoice total to the nearest rupee through the Round Off ledger.</summary>
+    public bool RoundOff { get; set; } = true;
+
+    public bool Post { get; set; } = true;
+
+    public string? IdempotencyKey { get; set; }
+
+    public long? ExpectedVersion { get; set; }
+
+    public List<InvoiceRequestLine> Lines { get; set; } = [];
+}
+
+public sealed class InvoiceRequestLine
+{
+    public InvoiceLineKind Kind { get; set; } = InvoiceLineKind.Stock;
+
+    public Guid? StockItemId { get; set; }
+
+    public Guid? GodownId { get; set; }
+
+    /// <summary>Sales/purchase ledger; defaults to the first ledger under Sales or Purchase Accounts.</summary>
+    public Guid? LedgerId { get; set; }
+
+    public string? Description { get; set; }
+
+    public decimal Quantity { get; set; }
+
+    public decimal Rate { get; set; }
+
+    public decimal DiscountPercent { get; set; }
+
+    /// <summary>Value of a service line (instead of quantity x rate).</summary>
+    public decimal? Amount { get; set; }
+}
+
+/// <summary>Result of computing an invoice without saving it (live totals in the entry screen).</summary>
+public sealed record InvoicePreview(
+    SupplyNature SupplyNature,
+    string? PlaceOfSupplyStateCode,
+    bool ChargesGst,
+    IReadOnlyList<InvoicePreviewLine> Lines,
+    decimal Taxable,
+    decimal Cgst,
+    decimal StateTax,
+    decimal Igst,
+    decimal Cess,
+    decimal RoundOff,
+    decimal GrandTotal);
+
+public sealed record InvoicePreviewLine(decimal Taxable, decimal GstPercent, string? HsnSac, decimal Tax);
 
 public sealed record VoucherListItem(
     Guid Id,

@@ -23,7 +23,8 @@ explicit conflict handling. Protocol constants live in `Contracts/Sync/SyncProto
 |---|---|---|
 | Company | ↑↓ | creation from a device allowed (creator becomes Owner on the server) |
 | AccountGroup, Ledger, VoucherType | ↑↓ | conflicts on concurrent edits; tombstones for deletes |
-| Voucher (+ lines) | ↑↓ | posted vouchers immutable; numbered in the creating device's series |
+| Voucher (+ lines, + invoice item lines) | ↑↓ | posted vouchers immutable; numbered in the creating device's series; invoices re-derived and re-validated by the server |
+| Unit, Godown, StockItem | ↑↓ | like ledgers: conflicts on concurrent edits, tombstones, duplicate names rejected; GST rate histories travel inside the item/ledger snapshot |
 | CompanyMembership | ↓ only | authored by the server; enforces offline authorization |
 | Audit | — | each store keeps its own chain; the server audits every accepted/rejected upload |
 
@@ -80,7 +81,9 @@ retained in full.
      outbox), rebase later pending entries of the same row onto it.
    * `Conflict`/`Rejected`/`Forbidden` → entry parked, `LocalConflict` created; later entries of the
      same row are held back until the user decides.
-   * `Deferred` → stays pending.
+   * `Deferred` → stays pending. When a batch both settles some entries and defers others (e.g. the company was
+     edited after its ledgers were created, so its newest state is queued behind them), the cycle sends the
+     deferred entries again; it stops as soon as a round settles nothing, so it always terminates.
 2. Pull each company until `HasMore = false`. Each page is applied in one SQLite transaction inside
    `BeginRemoteApply()` (no outbox → no echo loops) together with the cursor update. A remote change for
    a row that has unsent local changes is not applied over them; the push will surface the conflict.
@@ -103,6 +106,8 @@ pending count and last success time are observable by the UI.
 | Edit/delete of a row deleted on the server | `Conflict` (tombstone wins until a person decides). |
 | Upload by a revoked user / device | `Forbidden` / HTTP 401; local data and pending entries are kept, company hidden. |
 | Device unknown schema/protocol | HTTP 426; nothing applied; the app asks for an update. |
+| Invoice whose tax, values or postings do not follow from its lines | `Rejected` (`invoice.tax_mismatch`, `invoice.value_mismatch`, `invoice.accounting_mismatch`); nothing applied. |
+| Two devices sell the last units of an item offline | Both accepted; stock goes negative and the Stock Summary flags the item. Stock is a valuation, not a hard constraint, in a distributed system. |
 
 ## Conflict window
 

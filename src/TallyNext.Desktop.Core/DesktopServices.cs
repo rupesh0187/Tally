@@ -141,13 +141,15 @@ internal sealed class DesktopSyncPanel : ISyncPanel, IDisposable
     private readonly SyncEngine _engine;
     private readonly IServiceScopeFactory _scopes;
     private readonly LedgerCache _ledgers;
+    private readonly StockItemCache _items;
 
-    public DesktopSyncPanel(SyncStatusTracker tracker, SyncEngine engine, IServiceScopeFactory scopes, LedgerCache ledgers)
+    public DesktopSyncPanel(SyncStatusTracker tracker, SyncEngine engine, IServiceScopeFactory scopes, LedgerCache ledgers, StockItemCache items)
     {
         _tracker = tracker;
         _engine = engine;
         _scopes = scopes;
         _ledgers = ledgers;
+        _items = items;
         _tracker.Changed += OnTrackerChanged;
     }
 
@@ -165,6 +167,7 @@ internal sealed class DesktopSyncPanel : ISyncPanel, IDisposable
             if (report.Downloaded > 0)
             {
                 _ledgers.Invalidate();
+                _items.Invalidate();
             }
         }
         catch (SyncTransportException ex)
@@ -212,6 +215,7 @@ internal sealed class DesktopSyncPanel : ISyncPanel, IDisposable
         }
 
         _ledgers.Invalidate();
+        _items.Invalidate();
         await _engine.RefreshStatusAsync();
     }
 

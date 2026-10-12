@@ -7,6 +7,7 @@ using TallyNext.Domain.Accounts;
 using TallyNext.Domain.Audit;
 using TallyNext.Domain.Common;
 using TallyNext.Domain.Companies;
+using TallyNext.Domain.Inventory;
 using TallyNext.Domain.Vouchers;
 using TallyNext.Infrastructure.Persistence;
 
@@ -43,6 +44,14 @@ public sealed class LocalDbContext : DbContext, IAccountingDbContext
     public DbSet<Voucher> Vouchers => Set<Voucher>();
 
     public DbSet<VoucherLine> VoucherLines => Set<VoucherLine>();
+
+    public DbSet<VoucherItemLine> VoucherItemLines => Set<VoucherItemLine>();
+
+    public DbSet<UnitOfMeasure> Units => Set<UnitOfMeasure>();
+
+    public DbSet<Godown> Godowns => Set<Godown>();
+
+    public DbSet<StockItem> StockItems => Set<StockItem>();
 
     public DbSet<VoucherNumberSeries> VoucherNumberSeries => Set<VoucherNumberSeries>();
 
@@ -138,6 +147,9 @@ public sealed class LocalDbContext : DbContext, IAccountingDbContext
         modelBuilder.Entity<AccountGroup>().HasIndex(g => new { g.CompanyId, g.NormalizedName }).IsUnique(false);
         modelBuilder.Entity<Ledger>().HasIndex(l => new { l.CompanyId, l.NormalizedName }).IsUnique(false);
         modelBuilder.Entity<VoucherType>().HasIndex(t => new { t.CompanyId, t.NormalizedName }).IsUnique(false);
+        modelBuilder.Entity<UnitOfMeasure>().HasIndex(u => new { u.CompanyId, u.NormalizedSymbol }).IsUnique(false);
+        modelBuilder.Entity<Godown>().HasIndex(g => new { g.CompanyId, g.NormalizedName }).IsUnique(false);
+        modelBuilder.Entity<StockItem>().HasIndex(i => new { i.CompanyId, i.NormalizedName }).IsUnique(false);
         modelBuilder.Entity<Voucher>().HasIndex(v => new { v.CompanyId, v.VoucherTypeId, v.FinancialYearStart, v.SeriesCode, v.SequenceNumber }).IsUnique(false);
         modelBuilder.Entity<Voucher>().HasIndex(v => new { v.CompanyId, v.IdempotencyKey }).IsUnique(false);
         modelBuilder.Entity<Voucher>().HasIndex(v => v.ReversalOfVoucherId).IsUnique(false);

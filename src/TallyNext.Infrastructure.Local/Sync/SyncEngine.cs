@@ -131,15 +131,19 @@ public sealed class SyncEngine(
                 throw;
             }
 
-            var progressed = await ApplyPushResultsAsync(batch.Select(e => e.LocalSequence).ToList(), response, counters, cancellationToken);
-            if (!progressed || batch.Count < SyncProtocol.MaxPushBatchSize)
+            var (progressed, deferred) = await ApplyPushResultsAsync(batch.Select(e => e.LocalSequence).ToList(), response, counters, cancellationToken);
+
+            // Deferred changes (waiting for a row uploaded later in the same batch, e.g. a company edited after its
+            // ledgers were created) are resent while each round settles at least one change; this terminates
+            // because every round removes at least one entry from the pending set.
+            if (!progressed || (batch.Count < SyncProtocol.MaxPushBatchSize && deferred == 0))
             {
                 return;
             }
         }
     }
 
-    private async Task<bool> ApplyPushResultsAsync(IReadOnlyList<long> sequences, SyncPushResponse response, Counters counters, CancellationToken cancellationToken)
+    private async Task<(bool Progressed, int Deferred)> ApplyPushResultsAsync(IReadOnlyList<long> sequences, SyncPushResponse response, Counters counters, CancellationToken cancellationToken)
     {
         await using var scope = scopes.CreateAsyncScope();
         var db = scope.ServiceProvider.GetRequiredService<LocalDbContext>();
@@ -150,6 +154,7 @@ public sealed class SyncEngine(
         var entries = await db.OutboxEntries.Where(e => sequences.Contains(e.LocalSequence)).OrderBy(e => e.LocalSequence).ToListAsync(cancellationToken);
         var now = clock.GetUtcNow().UtcDateTime;
         var progressed = false;
+        var deferred = 0;
         foreach (var entry in entries)
         {
             if (!results.TryGetValue(entry.ChangeId, out var result))
@@ -219,13 +224,14 @@ public sealed class SyncEngine(
                 default:
                     entry.Status = OutboxStatus.Pending;
                     counters.Deferred++;
+                    deferred++;
                     break;
             }
         }
 
         await db.SaveChangesAsync(cancellationToken);
         await transaction.CommitAsync(cancellationToken);
-        return progressed;
+        return (progressed, deferred);
     }
 
     private async Task ResetInFlightAsync(IReadOnlyList<long> sequences, CancellationToken cancellationToken)
@@ -416,6 +422,9 @@ public sealed class SyncEngine(
         SyncEntityTypes.Ledger => db.Ledgers.Where(e => e.Id == id).ExecuteUpdateAsync(s => s.SetProperty(e => e.Version, version), ct),
         SyncEntityTypes.VoucherType => db.VoucherTypes.Where(e => e.Id == id).ExecuteUpdateAsync(s => s.SetProperty(e => e.Version, version), ct),
         SyncEntityTypes.Voucher => db.Vouchers.Where(e => e.Id == id).ExecuteUpdateAsync(s => s.SetProperty(e => e.Version, version), ct),
+        SyncEntityTypes.Unit => db.Units.Where(e => e.Id == id).ExecuteUpdateAsync(s => s.SetProperty(e => e.Version, version), ct),
+        SyncEntityTypes.Godown => db.Godowns.Where(e => e.Id == id).ExecuteUpdateAsync(s => s.SetProperty(e => e.Version, version), ct),
+        SyncEntityTypes.StockItem => db.StockItems.Where(e => e.Id == id).ExecuteUpdateAsync(s => s.SetProperty(e => e.Version, version), ct),
         _ => Task.FromResult(0),
     };
 

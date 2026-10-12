@@ -2,6 +2,7 @@ using TallyNext.Contracts.Sync;
 using TallyNext.Domain.Accounts;
 using TallyNext.Domain.Common;
 using TallyNext.Domain.Companies;
+using TallyNext.Domain.Inventory;
 using TallyNext.Domain.Vouchers;
 
 namespace TallyNext.Application.Sync;
@@ -20,6 +21,9 @@ public static class SnapshotMapper
         VoucherType => SyncEntityTypes.VoucherType,
         Voucher => SyncEntityTypes.Voucher,
         CompanyMembership => SyncEntityTypes.Membership,
+        UnitOfMeasure => SyncEntityTypes.Unit,
+        Godown => SyncEntityTypes.Godown,
+        StockItem => SyncEntityTypes.StockItem,
         _ => throw new ArgumentOutOfRangeException(nameof(entity), entity.GetType().Name, "Not a replicated entity type."),
     };
 
@@ -31,13 +35,16 @@ public static class SnapshotMapper
         VoucherType t => ToSnapshot(t),
         Voucher v => ToSnapshot(v),
         CompanyMembership m => ToSnapshot(m),
+        UnitOfMeasure u => ToSnapshot(u),
+        Godown g => ToSnapshot(g),
+        StockItem i => ToSnapshot(i),
         _ => throw new ArgumentOutOfRangeException(nameof(entity), entity.GetType().Name, "Not a replicated entity type."),
     };
 
     public static CompanySnapshot ToSnapshot(Company c) => new(
         c.Id, c.Name, c.MailingName, c.AddressLine1, c.AddressLine2, c.City, c.StateCode, c.Pincode, c.Country,
         c.Gstin, c.Pan, c.Email, c.Phone, c.CurrencyCode, c.CurrencySymbol, c.FinancialYearStartMonth,
-        c.BooksBeginningDate, c.LockedThroughDate, c.CreatedByUserId, c.IsDeleted, c.CreatedAtUtc, c.UpdatedAtUtc, c.UpdatedByUserId);
+        c.BooksBeginningDate, c.LockedThroughDate, c.GstRegistration, c.CreatedByUserId, c.IsDeleted, c.CreatedAtUtc, c.UpdatedAtUtc, c.UpdatedByUserId);
 
     public static AccountGroupSnapshot ToSnapshot(AccountGroup g) => new(
         g.Id, g.CompanyId, g.Name, g.NormalizedName, g.ParentGroupId, g.Nature, g.AffectsGrossProfit, g.SystemKey,
@@ -46,7 +53,7 @@ public static class SnapshotMapper
     public static LedgerSnapshot ToSnapshot(Ledger l) => new(
         l.Id, l.CompanyId, l.Name, l.NormalizedName, l.Alias, l.GroupId, l.OpeningBalanceMinor, l.OpeningSide, l.IsBillWise,
         l.SystemKey, l.GstRegistrationType, l.Gstin, l.StateCode, l.Pan, l.AddressLine1, l.AddressLine2, l.City, l.Pincode,
-        l.Email, l.Phone, l.CreditPeriodDays, l.IsDeleted, l.CreatedAtUtc, l.UpdatedAtUtc, l.UpdatedByUserId);
+        l.Email, l.Phone, l.CreditPeriodDays, l.GstTaxType, l.GstRates, l.IsDeleted, l.CreatedAtUtc, l.UpdatedAtUtc, l.UpdatedByUserId);
 
     public static VoucherTypeSnapshot ToSnapshot(VoucherType t) => new(
         t.Id, t.CompanyId, t.Name, t.NormalizedName, t.BaseType, t.Abbreviation, t.IsSystem, t.IsActive, t.IsDeleted,
@@ -57,7 +64,24 @@ public static class SnapshotMapper
         v.Number, v.Narration, v.Reference, v.ReferenceDate, v.ReversalOfVoucherId, v.TotalMinor, v.CreatedByUserId,
         v.CreatedOnDeviceId, v.PostedByUserId, v.PostedAtUtc, v.IdempotencyKey, v.IsDeleted, v.CreatedAtUtc, v.UpdatedAtUtc,
         v.UpdatedByUserId,
-        v.Lines.OrderBy(l => l.LineNo).Select(l => new VoucherLineSnapshot(l.Id, l.LineNo, l.LedgerId, l.Side, l.AmountMinor, l.Narration)).ToList());
+        v.Lines.OrderBy(l => l.LineNo).Select(l => new VoucherLineSnapshot(l.Id, l.LineNo, l.LedgerId, l.Side, l.AmountMinor, l.Narration)).ToList(),
+        v.PartyLedgerId,
+        v.PlaceOfSupplyStateCode,
+        v.SupplyNature,
+        v.ItemLines.OrderBy(l => l.LineNo).Select(l => new VoucherItemLineSnapshot(
+            l.Id, l.LineNo, l.Kind, l.StockItemId, l.GodownId, l.LedgerId, l.Description, l.QuantityMilli, l.RateScaled,
+            l.DiscountMilliPercent, l.TaxableMinor, l.Direction, l.Taxability, l.IgstMilliPercent, l.CessMilliPercent, l.HsnSac,
+            l.CgstMinor, l.StateTaxMinor, l.IgstMinor, l.CessMinor)).ToList());
+
+    public static UnitSnapshot ToSnapshot(UnitOfMeasure u) => new(
+        u.Id, u.CompanyId, u.Symbol, u.NormalizedSymbol, u.Name, u.DecimalPlaces, u.IsDeleted, u.CreatedAtUtc, u.UpdatedAtUtc, u.UpdatedByUserId);
+
+    public static GodownSnapshot ToSnapshot(Godown g) => new(
+        g.Id, g.CompanyId, g.Name, g.NormalizedName, g.IsSystem, g.IsDeleted, g.CreatedAtUtc, g.UpdatedAtUtc, g.UpdatedByUserId);
+
+    public static StockItemSnapshot ToSnapshot(StockItem i) => new(
+        i.Id, i.CompanyId, i.Name, i.NormalizedName, i.Alias, i.PartNumber, i.UnitId, i.ValuationMethod, i.GstRates,
+        i.OpeningQuantityMilli, i.OpeningValueMinor, i.OpeningGodownId, i.IsDeleted, i.CreatedAtUtc, i.UpdatedAtUtc, i.UpdatedByUserId);
 
     public static MembershipSnapshot ToSnapshot(CompanyMembership m) => new(
         m.Id, m.CompanyId, m.UserId, m.Role, m.IsActive, m.UserEmail, m.UserDisplayName, m.IsDeleted,
